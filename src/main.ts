@@ -5,6 +5,7 @@ import { Bot, TIER_NAMES, type Tier } from './core/ai';
 import {
   MAX_STARS, nodeById, NODES, placeStars, seriesOf, totalStars, ttStars, ttTargets, unlockedHulls, type CampaignNode, type Line,
 } from './core/campaign';
+import { BANTER, pick, WREN } from './core/banter';
 import { char, defaultTier, PIT_CREW } from './core/characters';
 import { drawHull2D, hullById, PLAYER_COLORS, STARTER_HULLS } from './core/ships';
 import { decodeGhost, encodeGhost, ghostPose, GHOST_HZ, type Ghost } from './core/ghost';
@@ -18,6 +19,7 @@ import {
 } from './storage';
 import { focusNode, nodeX, stars, renderBrief, renderCallsign, renderDialogue, renderHangar, renderMap } from './ui/campaignView';
 import { Hud } from './ui/hud';
+import { portrait } from './ui/portrait';
 
 type Mode = 'race' | 'tt' | 'split' | 'attract' | 'campaign';
 
@@ -39,7 +41,23 @@ interface Session {
   lastCount: number;
   boost: number[];
   finalLap: boolean;
+  radio: RadioState[];
 }
+
+interface RadioState {
+  last: number;
+  ahead: Set<Racer>;
+  grind: number;
+  lastGrindTip: number;
+  hitTips: number;
+  lastHitTip: number;
+  saidFinal: boolean;
+  saidLead: boolean;
+}
+
+const newRadio = (): RadioState => ({
+  last: -99, ahead: new Set(), grind: 0, lastGrindTip: -99, hitTips: 0, lastHitTip: -99, saidFinal: false, saidLead: false,
+});
 
 const hex = (c: number) => '#' + c.toString(16).padStart(6, '0');
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
@@ -58,6 +76,8 @@ class Game {
   private hudLayer = document.getElementById('hud') as HTMLDivElement;
   private touchHint = document.getElementById('touch') as HTMLDivElement;
   private pauseBtn = document.getElementById('pause-btn') as HTMLButtonElement;
+  private pressL = document.querySelector('#press .l') as HTMLElement;
+  private pressR = document.querySelector('#press .r') as HTMLElement;
   private setupMode: Mode = 'race';
   private eventId = 'x0';
   private imported = new Map<string, Ghost>();
@@ -152,7 +172,7 @@ class Game {
     this.end();
     const session: Session = {
       mode, event, targets, race, views: [], huds: [], ghost, ghostTimes: ghost ? this.ghostTimes(ghost) : null,
-      paused: false, acc: 0, resultsShown: false, lastCount: 99, boost: [0, 0], finalLap: false,
+      paused: false, acc: 0, resultsShown: false, lastCount: 99, boost: [0, 0], finalLap: false, radio: [newRadio(), newRadio()],
     };
     const follow = mode === 'attract' ? [race.racers[0]] : race.humans;
     for (const r of follow) {
@@ -232,7 +252,13 @@ class Game {
       }
       this.handleEvents(s);
     }
-    if (s.mode !== 'attract') this.frameAudio(s);
+    if (s.mode !== 'attract') {
+      this.frameAudio(s);
+      if (!s.paused && race.state === 'racing') this.frameRadio(s, dt);
+    }
+    const sides = s.mode !== 'attract' && !s.paused ? this.input.touchSides() : { left: false, right: false };
+    this.pressL.classList.toggle('on', sides.left);
+    this.pressR.classList.toggle('on', sides.right);
     for (const v of s.views) v.update(s.paused ? 0 : dt);
     s.huds.forEach((h, i) => h.update(dt, this.ghostDelta(s, i)));
     if (s.mode !== 'split' && coarse && race.time > 3) this.touchHint.classList.remove('show');
@@ -257,13 +283,71 @@ class Game {
     race.humans.forEach((r, i) => {
       const sh = r.ship;
       sound.updateEngine(i, Math.hypot(sh.vx, sh.vy), s.paused ? 0 : sh.throttle, sh.scrape > 0 && !s.paused, !s.paused && !r.out);
-      if (sh.hit > 250) sound.hit(sh.hit);
+      if (sh.hit > 250) { sound.hit(sh.hit); this.buzz(Math.min(70, Math.round(sh.hit / 8))); }
       if (sh.boost > s.boost[i]) sound.pad();
       s.boost[i] = sh.boost;
     });
     const p1 = race.humans[0];
     const final = !!p1 && !p1.finished && race.config.laps > 0 && p1.lap === race.config.laps;
     if (final !== s.finalLap) { s.finalLap = final; sound.setIntensity(final ? 0.9 : 0.6); }
+  }
+
+  private say(s: Session, i: number, who: string, text: string): void {
+    if (!this.settings.radio) return;
+    const hud = s.huds[i];
+    if (!hud) return;
+    const c = char(who);
+    const name = this.settings.callsign || this.settings.name;
+    hud.radio(portrait(c, 44), c.name.split(' ')[0], esc(text).replace(/\{name\}/g, esc(name)), c.color);
+    s.radio[i].last = s.race.time;
+  }
+
+  private frameRadio(s: Session, dt: number): void {
+    const race = s.race;
+    race.humans.forEach((me, i) => {
+      const st = s.radio[i];
+      if (me.finished || me.out) return;
+      if (race.time < 3) {
+        st.ahead = new Set(race.racers.filter((r) => r !== me && r.place < me.place));
+        return;
+      }
+      const free = race.time - st.last > 5;
+      const sh = me.ship;
+      // Wren's tips.
+      if (sh.scrape > 0) st.grind += dt; else st.grind = 0;
+      const laps = race.config.laps;
+      if (laps > 0 && me.lap === laps && !st.saidFinal && me.maxLap === laps) {
+        st.saidFinal = true;
+        this.say(s, i, 'wren', pick(WREN.final));
+        return;
+      }
+      if (sh.hit > 320 && st.hitTips < 3 && race.time - st.lastHitTip > 15 && free) {
+        st.hitTips++;
+        st.lastHitTip = race.time;
+        this.say(s, i, 'wren', pick(WREN.hit));
+        return;
+      }
+      if (st.grind > 1.4 && race.time - st.lastGrindTip > 25 && free) {
+        st.lastGrindTip = race.time;
+        this.say(s, i, 'wren', pick(WREN.grind));
+        return;
+      }
+      // Overtakes.
+      const ahead = new Set(race.racers.filter((r) => r !== me && !r.out && r.place < me.place));
+      const passedMe = [...ahead].filter((r) => !st.ahead.has(r) && r.spec.who && BANTER[r.spec.who] && !r.finished);
+      const iPassed = [...st.ahead].filter((r) => !ahead.has(r) && r.spec.who && BANTER[r.spec.who] && !r.out);
+      st.ahead = ahead;
+      if (free && passedMe.length) this.say(s, i, passedMe[0].spec.who!, pick(BANTER[passedMe[0].spec.who!].passMe));
+      else if (free && iPassed.length && Math.random() < 0.7) this.say(s, i, iPassed[0].spec.who!, pick(BANTER[iPassed[0].spec.who!].passed));
+      else if (me.place === 1 && !st.saidLead && race.racers.length > 1 && free && s.mode !== 'tt' && s.event?.kind !== 'tt') {
+        st.saidLead = true;
+        this.say(s, i, 'wren', pick(WREN.lead));
+      }
+    });
+  }
+
+  private buzz(pattern: number | number[]): void {
+    if (this.settings.vibrate && navigator.vibrate) navigator.vibrate(pattern);
   }
 
   private ghostDelta(s: Session, i: number): number | null {
@@ -303,6 +387,7 @@ class Game {
         }
         const laps = race.config.laps;
         sound.chime(record ? 'record' : ev.best ? 'best' : 'lap');
+        this.buzz(25);
         if (record) hud.flash(`NEW RECORD  ${formatTime(ev.time)}`, 'record');
         else if (ev.best) hud.flash(`BEST LAP  ${formatTime(ev.time)}`, 'best');
         else if (laps > 0 && ev.racer.lap === laps) hud.flash('FINAL LAP');
@@ -310,6 +395,7 @@ class Game {
         if (laps > 0 && ev.racer.lap === laps && (record || ev.best)) setTimeout(() => hud.flash('FINAL LAP'), 1300);
       } else if (ev.type === 'finish') {
         sound.chime('finish');
+        this.buzz([40, 60, 40]);
         hud.flash(race.config.elimination ? 'LAST ONE FLYING' : `FINISHED  ${ordinal(ev.place)}`, 'best');
       }
     }
@@ -432,6 +518,10 @@ class Game {
           ${slider('music', 'Music', s.music)}
           ${slider('sfx', 'Sound effects', s.sfx)}
           <p class="note"><kbd>M</kbd> mutes everything.</p>
+          <div class="opts">
+            <label class="toggle"><input type="checkbox" data-set="radio" ${s.radio ? 'checked' : ''}><span>Radio chatter</span></label>
+            <label class="toggle"><input type="checkbox" data-set="vibrate" ${s.vibrate ? 'checked' : ''}><span>Vibration (Android)</span></label>
+          </div>
           <label class="field"><span>Player 1 name</span><input data-set="name" maxlength="16" value="${esc(s.name)}"></label>
           <label class="field"><span>Player 2 name</span><input data-set="name2" maxlength="16" value="${esc(s.name2)}"></label>
           <div class="row"><button data-action="wipe">Reset progress, records &amp; ghosts</button><button class="primary" data-action="go" data-to="main">Done</button></div>`;
@@ -729,3 +819,7 @@ function drawPreview(c: HTMLCanvasElement, id: string): void {
 }
 
 void new Game().init();
+
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  addEventListener('load', () => { navigator.serviceWorker.register('./sw.js').catch(() => {}); });
+}

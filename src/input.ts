@@ -70,6 +70,13 @@ export class Input {
     return { left, right };
   }
 
+  /** Which screen halves are currently touched (for on-screen feedback). */
+  touchSides(): { left: boolean; right: boolean } {
+    let left = false, right = false;
+    for (const side of this.touches.values()) { if (side === 'L') left = true; else right = true; }
+    return { left, right };
+  }
+
   /** Buttons for each human slot. In single-player, every device drives player 1. */
   read(players: number): Buttons[] {
     const g0 = this.pad(0), g1 = this.pad(1);

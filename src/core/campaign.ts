@@ -241,9 +241,9 @@ export const NODES: CampaignNode[] = [
     pre: L(['wren', 'Last tune-up before the final. Flat out, clean exits.']),
   },
   {
-    id: 'c4', kind: 'race', track: 'slingshot', laps: 4, col: 15, row: 1, requires: ['c2', 'c3'], boss: 'sable', reward: 'crescent',
+    id: 'c4', kind: 'race', track: 'slingshot', laps: 3, col: 15, row: 1, requires: ['c2', 'c3'], boss: 'sable', reward: 'crescent',
     field: f(['sable', 'insane'], ['halo', 'insane'], ['rook', 'insane'], ['kite', 'insane'], ['vex', 'insane']),
-    brief: 'The title decider. Four laps of Slingshot against Sable and four other Insane pilots.',
+    brief: 'The title decider. Three laps of Slingshot against Sable and four other Insane pilots.',
     pre: L(
       ['dex', 'This is it. The title. Sable Ardent, five-time champion, against {name}!'],
       ['sable', 'When we met, I told you to stay out of my wake. That was a warning. Now it\'s an invitation.'],

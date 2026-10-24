@@ -8,6 +8,9 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="description" content="Racewing: a neon two-button racer with gravity zones and wall-scrape boosting." />
     <title>Racewing</title>
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" href="./icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="./icon-192.png" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;900&family=Rajdhani:wght@500;700&display=swap" rel="stylesheet" />
@@ -16,6 +19,7 @@
     <div id="game"></div>
     <div id="hud"></div>
     <div id="touch"><div><span>◀</span>hold to turn</div><div>hold to turn<span>▶</span></div><p>hold both to brake</p></div>
+    <div id="press"><i class="l"></i><i class="r"></i></div>
     <button id="pause-btn" aria-label="Pause">❚❚</button>
     <div id="menu"></div>
     <script type="module" src="/src/main.ts"></script>

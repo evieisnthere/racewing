@@ -17,12 +17,14 @@ export interface Settings {
   hull: string;
   color: number;
   callsign: string;
+  radio: boolean;
+  vibrate: boolean;
 }
 
 const DEFAULTS: Settings = {
   scheme: 'thrust', rubberBand: true, collisions: true, ghosts: true,
   laps: 3, bots: 5, tier: 'medium', track: 'pulse', name: 'Player 1', name2: 'Player 2', music: 0.6, sfx: 0.8,
-  hull: 'dart', color: 0x2ef2ff, callsign: '',
+  hull: 'dart', color: 0x2ef2ff, callsign: '', radio: true, vibrate: true,
 };
 
 const PREFIX = 'racewing.';

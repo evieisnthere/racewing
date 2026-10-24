@@ -2,14 +2,14 @@ import { clamp, smoothstep, wrapAngle } from './math';
 import type { Track } from './track';
 
 export const PHYS = {
-  thrust: 600,
+  thrust: 510,
   drag: 1.0,
   /** Lateral velocity decay rate; some of the bled speed is fed forward. */
   grip: 4.5,
   gripConvert: 0.3,
-  turnRate: 3.3,
+  turnRate: 3.1,
   turnAccel: 30,
-  brake: 1000,
+  brake: 900,
   reverse: 300,
   maxReverse: 180,
   radius: 9,
@@ -18,13 +18,16 @@ export const PHYS = {
   /** Speed lost per second while sliding along a wall nose-first. */
   wallFriction: 0.5,
   /** Grinding: tail (engine flame) at the wall, nose angled away from it. */
-  grindReach: 12,
-  grindMinAngle: 0.03,
-  scrapeAccel: 380,
+  grindReach: 18,
+  /** sin of the angle between nose and wall; slightly negative lets a near-parallel nose still count. */
+  grindMinAngle: -0.12,
+  scrapeAccel: 330,
+  /** Scales every gravity zone and well. */
+  fieldScale: 0.8,
   restitution: 0.35,
   hitLoss: 0.5,
-  padBoost: 260,
-  padMax: 1000,
+  padBoost: 220,
+  padMax: 850,
   padCooldown: 0.5,
   shipBounce: 0.6,
 };
@@ -111,15 +114,15 @@ export function stepShip(s: Ship, intent: Intent, track: Track, dt: number): voi
   for (const z of track.zones) {
     if (!track.inRange(s.idx, z.i0, z.i1)) continue;
     const base = Math.atan2(track.ty[s.idx], track.tx[s.idx]) + z.angle;
-    s.vx += Math.cos(base) * z.strength * dt;
-    s.vy += Math.sin(base) * z.strength * dt;
+    s.vx += Math.cos(base) * z.strength * PHYS.fieldScale * dt;
+    s.vy += Math.sin(base) * z.strength * PHYS.fieldScale * dt;
     s.inField = true;
   }
   for (const w of track.wells) {
     const dx = w.x - s.x, dy = w.y - s.y;
     const d = Math.hypot(dx, dy);
     if (d >= w.radius || d < 1) continue;
-    const f = w.strength * (1 - d / w.radius) * dt;
+    const f = w.strength * PHYS.fieldScale * (1 - d / w.radius) * dt;
     s.vx += (dx / d) * f; s.vy += (dy / d) * f;
     s.inField = true;
   }

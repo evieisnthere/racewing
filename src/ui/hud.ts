@@ -14,6 +14,8 @@ export class Hud {
   private flashEl: HTMLElement;
   private count: HTMLElement;
   private infoEl: HTMLElement;
+  private radioEl: HTMLElement;
+  private radioTimer = 0;
   private flashTimer = 0;
   private cache = new Map<HTMLElement, string>();
 
@@ -32,11 +34,13 @@ export class Hud {
       </div>
       <div class="hud-speed"><div></div></div>
       <div class="hud-flash"></div>
+      <div class="hud-radio"></div>
       <div class="hud-count"></div>`;
     const q = (s: string) => this.el.querySelector(s) as HTMLElement;
     this.pos = q('.hud-pos'); this.lap = q('.hud-lap'); this.time = q('.hud-time'); this.best = q('.hud-best');
     this.delta = q('.hud-delta'); this.speed = q('.hud-speed > div'); this.flashEl = q('.hud-flash'); this.count = q('.hud-count');
     this.infoEl = q('.hud-info');
+    this.radioEl = q('.hud-radio');
     this.el.style.setProperty('--racer', '#' + racer.spec.color.toString(16).padStart(6, '0'));
     parent.appendChild(this.el);
   }
@@ -48,6 +52,14 @@ export class Hud {
 
   info(html: string): void {
     this.infoEl.innerHTML = html;
+  }
+
+  /** Show a radio message (portrait SVG, speaker, line) for a few seconds. */
+  radio(face: string, name: string, html: string, color: number): void {
+    this.radioEl.innerHTML = `${face}<div><b>${name}</b><p>${html}</p></div>`;
+    this.radioEl.style.setProperty('--c', '#' + color.toString(16).padStart(6, '0'));
+    this.radioEl.classList.add('show');
+    this.radioTimer = 3.2;
   }
 
   flash(text: string, cls = ''): void {
@@ -99,6 +111,8 @@ export class Hud {
       this.count.className = 'hud-count show go';
     } else this.count.className = 'hud-count';
 
+    this.radioTimer -= dt;
+    if (this.radioTimer <= 0) this.radioEl.classList.remove('show');
     this.flashTimer -= dt;
     if (this.flashTimer <= 0) this.flashEl.classList.remove('show');
   }

@@ -295,3 +295,44 @@ input[type='range'] { padding: 0; accent-color: var(--cyan); }
 }
 
 .callsign { color: var(--cyan); font-weight: 700; }
+
+/* ---------- radio, touch feedback ---------- */
+.hud-radio {
+  position: absolute; left: max(14px, env(safe-area-inset-left)); bottom: max(44px, calc(env(safe-area-inset-bottom) + 30px));
+  display: flex; gap: 10px; align-items: center; max-width: min(420px, 80%);
+  padding: 8px 14px 8px 8px; border-radius: 14px; background: rgba(5, 6, 11, 0.78);
+  border: 1px solid color-mix(in srgb, var(--c, #2ef2ff) 55%, transparent);
+  opacity: 0; transform: translateY(10px); transition: opacity 0.25s, transform 0.25s;
+}
+.hud-radio.show { opacity: 1; transform: none; }
+.hud-radio svg { flex: none; border-radius: 9px; }
+.hud-radio b { font: 600 13px var(--display); color: var(--c); letter-spacing: 1px; }
+.hud-radio p { margin: 2px 0 0; font: 600 16px/1.25 var(--ui); }
+.hud.compact .hud-radio { bottom: 30px; max-width: 70%; }
+.hud.compact .hud-radio svg { width: 36px; height: 36px; }
+.hud.compact .hud-radio p { font-size: 14px; }
+#press { position: fixed; inset: 0; pointer-events: none; }
+#press i {
+  position: absolute; top: 0; bottom: 0; width: 46%; opacity: 0; transition: opacity 0.08s;
+}
+#press .l { left: 0; background: linear-gradient(90deg, rgba(46, 242, 255, 0.22), transparent 30%); }
+#press .r { right: 0; background: linear-gradient(270deg, rgba(255, 61, 242, 0.22), transparent 30%); }
+#press i.on { opacity: 1; }
+
+/* ---------- short (landscape phone) screens ---------- */
+@media (max-height: 520px) {
+  .panel { padding: 14px 18px; }
+  h2 { font-size: 20px; margin-bottom: 10px; }
+  .logo { font-size: 38px; }
+  .tag { margin-bottom: 10px; }
+  .stack { grid-template-columns: 1fr 1fr; gap: 8px; }
+  .stack button { padding: 9px; font-size: 17px; }
+  .panel.main { width: min(560px, 100%); }
+  .map { zoom: 0.72; }
+  .dlg svg { width: 84px; height: 84px; }
+  .speech p { font-size: 17px; }
+  .row { margin-top: 10px; }
+  .tracks { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+  .track small { display: none; }
+  .hud-count { font-size: 80px; }
+}
