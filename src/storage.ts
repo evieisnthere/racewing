@@ -14,11 +14,15 @@ export interface Settings {
   name2: string;
   music: number;
   sfx: number;
+  hull: string;
+  color: number;
+  callsign: string;
 }
 
 const DEFAULTS: Settings = {
   scheme: 'thrust', rubberBand: true, collisions: true, ghosts: true,
   laps: 3, bots: 5, tier: 'medium', track: 'pulse', name: 'Player 1', name2: 'Player 2', music: 0.6, sfx: 0.8,
+  hull: 'dart', color: 0x2ef2ff, callsign: '',
 };
 
 const PREFIX = 'racewing.';
@@ -54,6 +58,15 @@ export function loadProgress(): Record<string, number> {
 
 export function saveProgress(p: Record<string, number>): void {
   set('campaign', JSON.stringify(p));
+}
+
+/** Dialogue keys already shown ("x0:pre", "r5:win", ...). */
+export function loadSeen(): Set<string> {
+  try { return new Set(JSON.parse(get('story') ?? '[]')); } catch { return new Set(); }
+}
+
+export function saveSeen(seen: Set<string>): void {
+  set('story', JSON.stringify([...seen]));
 }
 
 export function clearAll(): void {

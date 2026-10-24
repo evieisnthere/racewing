@@ -2,7 +2,11 @@ import { Application } from 'pixi.js';
 import './style.css';
 import { sound } from './audio';
 import { Bot, TIER_NAMES, type Tier } from './core/ai';
-import { CHAPTERS, findEvent, KIND_LABEL, MAX_STARS, placeStars, ttStars, ttTargets, type CampaignEvent } from './core/campaign';
+import {
+  MAX_STARS, nodeById, NODES, placeStars, seriesOf, totalStars, ttStars, ttTargets, unlockedHulls, type CampaignNode, type Line,
+} from './core/campaign';
+import { char, defaultTier, PIT_CREW } from './core/characters';
+import { drawHull2D, hullById, PLAYER_COLORS, STARTER_HULLS } from './core/ships';
 import { decodeGhost, encodeGhost, ghostPose, GHOST_HZ, type Ghost } from './core/ghost';
 import { formatTime } from './core/math';
 import { Race, STEP, type Racer, type RacerSpec } from './core/race';
@@ -10,20 +14,19 @@ import { getTrack, TRACK_DEFS } from './core/tracks';
 import { Input } from './input';
 import { View } from './render/view';
 import {
-  bestLap, clearAll, ghostCode, loadProgress, loadSettings, saveBestLap, saveGhostCode, saveProgress, saveSettings,
+  bestLap, clearAll, ghostCode, loadProgress, loadSeen, loadSettings, saveBestLap, saveGhostCode, saveProgress, saveSeen, saveSettings,
 } from './storage';
+import { focusNode, nodeX, stars, renderBrief, renderCallsign, renderDialogue, renderHangar, renderMap } from './ui/campaignView';
 import { Hud } from './ui/hud';
 
 type Mode = 'race' | 'tt' | 'split' | 'attract' | 'campaign';
 
-const COLORS = [0x2ef2ff, 0xff3df2, 0xffe14d, 0x3dff9a, 0xff7a3d, 0xb06bff];
-const BOT_NAMES = ['Vex', 'Nova', 'Kite', 'Rook', 'Halo', 'Juno'];
 const MIXED: Tier[] = ['insane', 'hard', 'hard', 'medium', 'medium', 'easy'];
 const MODE_TITLES: Record<Mode, string> = { race: 'Quick Race', tt: 'Time Trial', split: 'Split-screen', attract: '', campaign: 'Campaign' };
 
 interface Session {
   mode: Mode;
-  event: CampaignEvent | null;
+  event: CampaignNode | null;
   targets: [number, number, number] | null;
   race: Race;
   views: View[];
@@ -41,7 +44,6 @@ interface Session {
 const hex = (c: number) => '#' + c.toString(16).padStart(6, '0');
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 const ordinal = (n: number) => n + (['st', 'nd', 'rd'][n - 1] ?? 'th');
-const stars = (n: number) => `<span class="stars">${'★'.repeat(n)}<i>${'★'.repeat(3 - n)}</i></span>`;
 const coarse = matchMedia('(pointer: coarse)').matches;
 /** `?autopilot` lets an Insane bot drive the human ships (demo/testing). */
 const AUTOPILOT = new URLSearchParams(location.search).has('autopilot');
@@ -57,10 +59,13 @@ class Game {
   private touchHint = document.getElementById('touch') as HTMLDivElement;
   private pauseBtn = document.getElementById('pause-btn') as HTMLButtonElement;
   private setupMode: Mode = 'race';
-  private eventId = 'r1';
+  private eventId = 'x0';
   private imported = new Map<string, Ghost>();
-  /** Stars earned by the last campaign event, and whether it beat the previous best. */
-  private earned: { stars: number; improved: boolean; unlocked: string | null } | null = null;
+  private seen = loadSeen();
+  /** Stars earned by the last campaign event, and what that unlocked. */
+  private earned: { stars: number; improved: boolean; unlocked: string[] } | null = null;
+  private dialogue: { lines: Line[]; i: number; then: () => void } | null = null;
+  private hangarBack = 'main';
 
   async init(): Promise<void> {
     await this.app.init({
@@ -99,27 +104,34 @@ class Game {
     void this.start('attract');
   }
 
-  private async start(mode: Mode, event: CampaignEvent | null = null): Promise<void> {
+  private async start(mode: Mode, event: CampaignNode | null = null): Promise<void> {
     const s = this.settings;
     const track = getTrack(event?.track ?? s.track);
     const humans = mode === 'split' ? 2 : mode === 'attract' ? 0 : 1;
     const racers: RacerSpec[] = [];
+    const pilot = (who: string, tier: Tier): RacerSpec => {
+      const c = char(who);
+      return { name: c.name.split(' ')[0], color: c.color, hull: c.hull, who, kind: 'bot', tier };
+    };
     if (event) {
-      event.field.forEach((o, i) => racers.push({ name: o.name, color: COLORS[(i + 1) % COLORS.length], kind: 'bot', tier: o.tier }));
+      for (const o of event.field) racers.push(pilot(o.who, o.tier));
     } else {
       const botCount = mode === 'tt' ? 0 : mode === 'attract' ? 6 : Math.min(s.bots, 6 - humans);
+      const crew = [...PIT_CREW].sort(() => Math.random() - 0.5);
       for (let i = 0; i < botCount; i++) {
-        const tier = mode === 'attract' || s.tier === 'mixed' ? MIXED[i] : s.tier;
-        racers.push({ name: BOT_NAMES[i], color: COLORS[(i + humans) % COLORS.length], kind: 'bot', tier });
+        const tier = mode === 'attract' ? defaultTier(crew[i]) : s.tier === 'mixed' ? MIXED[i] : s.tier;
+        racers.push(pilot(crew[i], tier));
       }
     }
+    const p2Color = PLAYER_COLORS.find((c) => c !== s.color) ?? 0xff3df2;
     for (let i = 0; i < humans; i++) {
-      racers.push({ name: i === 0 ? s.name : s.name2, color: COLORS[i], kind: 'human', slot: i });
+      const name = i === 0 ? (mode === 'campaign' && s.callsign ? s.callsign : s.name) : s.name2;
+      racers.push({ name, color: i === 0 ? s.color : p2Color, hull: i === 0 ? s.hull : 'wasp', kind: 'human', slot: i });
     }
     const timeTrial = mode === 'tt' || event?.kind === 'tt';
     const race = new Race({
       track,
-      laps: event ? (event.kind === 'elim' ? 0 : event.laps) : timeTrial || mode === 'attract' ? 0 : s.laps,
+      laps: event ? (event.kind === 'elim' ? 0 : event.kind === 'tt' ? 3 : event.laps) : timeTrial || mode === 'attract' ? 0 : s.laps,
       elimination: event?.kind === 'elim',
       racers,
       scheme: s.scheme,
@@ -227,8 +239,11 @@ class Game {
     if (race.state === 'finished' && !s.resultsShown && race.time - race.finishedAt > 2.5) {
       s.resultsShown = true;
       sound.setIntensity(0.3);
-      if (s.event) this.scoreEvent(s);
-      this.show('results');
+      if (s.event) {
+        this.scoreEvent(s);
+        const win = this.won(s);
+        this.story(`${s.event.id}:${win ? 'win' : 'lose'}`, win ? s.event.win : s.event.lose, () => this.show('results'));
+      } else this.show('results');
     }
   }
 
@@ -304,21 +319,35 @@ class Game {
   private scoreEvent(s: Session): void {
     const ev = s.event!;
     const me = s.race.humans[0];
-    const earned = ev.kind === 'tt' ? ttStars(me.bestLap, s.targets!) : placeStars(me.place);
-    const before = this.totalStars();
-    const prev = this.progress[ev.id] ?? 0;
-    if (earned > prev) {
-      this.progress[ev.id] = earned;
-      saveProgress(this.progress);
-    }
-    const after = this.totalStars();
-    const unlocked = CHAPTERS.find((c) => c.need > before && c.need <= after)?.name ?? null;
-    this.earned = { stars: earned, improved: earned > prev, unlocked };
+    const p = this.progress;
+    const hullsBefore = unlockedHulls(p);
+    const starsBefore = totalStars(p);
+    const earned = ev.kind === 'exhibition' ? 0 : ev.kind === 'tt' ? ttStars(me.bestLap, s.targets!) : placeStars(me.place);
+    const prev = p[ev.id] ?? -1;
+    if (earned > prev) { p[ev.id] = earned; saveProgress(p); }
+    const unlocked: string[] = [];
+    for (const h of unlockedHulls(p)) if (!hullsBefore.includes(h)) unlocked.push(`${hullById(h).name} hull`);
+    for (const g of NODES) if (g.gate && starsBefore < g.gate && totalStars(p) >= g.gate) unlocked.push(`${seriesOf(g).name} gate`);
+    this.earned = { stars: earned, improved: earned > Math.max(0, prev), unlocked };
     if (earned > 0) setTimeout(() => sound.chime('star'), 400);
   }
 
+  private won(s: Session): boolean {
+    const ev = s.event!;
+    return ev.kind === 'exhibition' ? s.race.humans[0].place === 1 : (this.earned?.stars ?? 0) > 0;
+  }
+
+  /** Show dialogue lines (once per key unless forced), then continue. */
+  private story(key: string, lines: Line[] | undefined, then: () => void, force = false): void {
+    if (!lines?.length || (!force && this.seen.has(key))) { then(); return; }
+    this.seen.add(key);
+    saveSeen(this.seen);
+    this.dialogue = { lines, i: 0, then };
+    this.show('dialogue');
+  }
+
   private totalStars(): number {
-    return Object.values(this.progress).reduce((a, b) => a + b, 0);
+    return totalStars(this.progress);
   }
 
   private togglePause(): void {
@@ -342,11 +371,22 @@ class Game {
     this.menu.innerHTML = '';
   }
 
+  private screen = 'main';
+
   private show(screen: string): void {
+    if (screen === 'hangar' && this.screen !== 'hangar') this.hangarBack = this.screen === 'campaign' ? 'campaign' : 'main';
+    this.screen = screen;
     this.menu.innerHTML = `<div class="panel ${screen}">${this.render(screen)}</div>`;
     this.menu.classList.add('show');
     this.menu.scrollTop = 0;
     for (const c of this.menu.querySelectorAll<HTMLCanvasElement>('canvas[data-preview]')) drawPreview(c, c.dataset.preview!);
+    for (const c of this.menu.querySelectorAll<HTMLCanvasElement>('canvas[data-hull]')) drawShip(c, c.dataset.hull!, this.settings.color, 2.2);
+    const big = document.getElementById('hangar-ship') as HTMLCanvasElement | null;
+    if (big) drawShip(big, this.settings.hull, this.settings.color, 5.5);
+    if (screen === 'campaign') {
+      const scroller = this.menu.querySelector('.map-scroll') as HTMLElement | null;
+      if (scroller) scroller.scrollLeft = Math.max(0, nodeX(focusNode(this.progress)) - scroller.clientWidth / 2);
+    }
   }
 
   private render(screen: string): string {
@@ -357,17 +397,24 @@ class Game {
           <h1 class="logo">RACE<span>WING</span></h1>
           <p class="tag">gravity · walls · two buttons</p>
           <div class="stack">
-            <button class="primary" data-action="go" data-to="campaign">Campaign <small>${this.totalStars()}/${MAX_STARS}★</small></button>
+            <button class="primary" data-action="campaign">Campaign <small>${this.totalStars()}/${MAX_STARS}★</small></button>
             <button data-action="setup" data-mode="race">Quick Race</button>
             <button data-action="setup" data-mode="tt">Time Trial</button>
             <button data-action="setup" data-mode="split">Split-screen</button>
+            <button data-action="go" data-to="hangar">Hangar</button>
             <button data-action="go" data-to="settings">Settings</button>
             <button data-action="go" data-to="help">How to play</button>
           </div>`;
       case 'campaign':
-        return this.renderCampaign();
+        return renderMap(this.progress);
       case 'brief':
-        return this.renderBrief();
+        return renderBrief(nodeById(this.eventId)!, this.progress, s.callsign || s.name);
+      case 'dialogue':
+        return renderDialogue(this.dialogue!.lines, this.dialogue!.i, s.callsign || s.name);
+      case 'callsign':
+        return renderCallsign(s.callsign || s.name);
+      case 'hangar':
+        return renderHangar(s.hull, s.color, [...STARTER_HULLS, ...unlockedHulls(this.progress)]);
       case 'setup':
         return this.renderSetup();
       case 'settings': {
@@ -432,57 +479,6 @@ class Game {
     return '';
   }
 
-  private renderCampaign(): string {
-    const total = this.totalStars();
-    return `
-      <h2>Campaign</h2>
-      <p class="tag">Pilot licence · ${total}/${MAX_STARS}★</p>
-      ${CHAPTERS.map((c) => {
-        const locked = total < c.need;
-        const got = c.events.reduce((a, e) => a + (this.progress[e.id] ?? 0), 0);
-        return `
-        <section class="chapter ${locked ? 'locked' : ''}">
-          <header><b>${c.name}</b><span>${locked ? `🔒 needs ${c.need}★` : `${got}/${c.events.length * 3}★`}</span></header>
-          <div class="events">${c.events.map((e, i) => `
-            <button class="event" data-action="brief" data-id="${e.id}" ${locked ? 'disabled' : ''} style="--c:${hex(getTrack(e.track).def.color)}">
-              <em>${i + 1}. ${KIND_LABEL[e.kind]}</em>
-              <b>${getTrack(e.track).def.name}</b>
-              ${stars(this.progress[e.id] ?? 0)}
-            </button>`).join('')}
-          </div>
-        </section>`;
-      }).join('')}
-      <div class="row"><button class="primary" data-action="go" data-to="main">Back</button></div>`;
-  }
-
-  private renderBrief(): string {
-    const found = findEvent(this.eventId)!;
-    const e = found.event;
-    const t = getTrack(e.track);
-    let goal: string;
-    if (e.kind === 'tt') {
-      const [b, sv, g] = ttTargets(e.track);
-      goal = `Best lap over 3 laps:<br><span class="medal b"></span>Bronze ${formatTime(b)} <span class="medal s"></span>Silver ${formatTime(sv)} <span class="medal g"></span>Gold ${formatTime(g)}`;
-    } else {
-      goal = `${e.kind === 'elim' ? `${e.field.length + 1} ships, one knocked out every lap.` : `${e.laps} laps, ${e.field.length + 1} ships.`}<br>1st ★★★ · 2nd ★★ · 3rd ★`;
-    }
-    const field = e.field.length ? `<p class="field-list">${e.field.map((o) => `${esc(o.name)} <small>${TIER_NAMES[o.tier]}</small>`).join(' · ')}</p>` : '';
-    return `
-      <h2>${found.chapter.name} · ${found.index + 1}</h2>
-      <div class="brief-body">
-        <canvas width="240" height="160" data-preview="${t.def.id}"></canvas>
-        <div>
-          <p class="kind" style="--c:${hex(t.def.color)}">${KIND_LABEL[e.kind]} · ${t.def.name}</p>
-          <p>${esc(e.brief)}</p>
-          ${e.rival ? `<blockquote><b>${esc(e.rival.name)}:</b> “${esc(e.rival.taunt)}”</blockquote>` : ''}
-          <p class="goal">${goal}</p>
-          ${field}
-          <p>Your best: ${stars(this.progress[e.id] ?? 0)}</p>
-        </div>
-      </div>
-      <div class="row"><button data-action="go" data-to="campaign">Back</button><button class="primary" data-action="start-event">Start</button></div>`;
-  }
-
   private renderSetup(): string {
     const s = this.settings;
     const m = this.setupMode;
@@ -538,14 +534,14 @@ class Game {
     let actions = `<button class="primary" data-action="restart">Race again</button>`;
     if (s.event && this.earned) {
       const e = this.earned;
-      const found = findEvent(s.event.id)!;
-      const next = found.chapter.events[found.index + 1] ?? CHAPTERS[CHAPTERS.indexOf(found.chapter) + 1]?.events[0];
-      const nextOpen = next && this.totalStars() >= (CHAPTERS.find((c) => c.events.includes(next))?.need ?? 0);
-      head = `<div class="earned">${stars(e.stars)}<p>${e.stars === 0 ? (s.event.kind === 'tt' ? 'No medal this time. Retry?' : 'Off the podium. Retry?') : e.improved ? 'New best for this event!' : 'Stars already earned.'}</p>
-        ${e.unlocked ? `<p class="unlock">🔓 ${esc(e.unlocked)} unlocked!</p>` : ''}</div>`;
-      actions = `<button data-action="go" data-to="campaign">Campaign</button>
-        <button ${nextOpen ? '' : 'class="primary"'} data-action="restart">Retry</button>
-        ${nextOpen ? `<button class="primary" data-action="brief" data-id="${next.id}">Next event</button>` : ''}`;
+      const ex = s.event.kind === 'exhibition';
+      const msg = ex ? (race.humans[0].place === 1 ? 'You beat the champion!' : 'Exhibition complete.')
+        : e.stars === 0 ? (s.event.kind === 'tt' ? 'No medal this time. Retry?' : 'Off the podium. Retry?')
+          : e.improved ? 'New best for this event!' : 'Stars already earned.';
+      head = `<div class="earned">${ex ? '' : stars(e.stars)}<p>${msg}</p>
+        ${e.unlocked.map((u) => `<p class="unlock">🔓 ${esc(u)} unlocked!</p>`).join('')}</div>`;
+      actions = `<button data-action="restart">Retry</button>
+        <button class="primary" data-action="campaign">Campaign map</button>`;
     } else {
       actions = `<button data-action="quit">Menu</button>${hasGhost ? '<button data-action="share">Share ghost</button>' : ''}${actions}`;
     }
@@ -581,9 +577,22 @@ class Game {
     switch (d.action) {
       case 'go': this.show(d.to!); break;
       case 'setup': this.setupMode = d.mode as Mode; this.show('setup'); break;
+      case 'campaign':
+        if (!s.callsign) { this.show('callsign'); break; }
+        if (this.session?.mode !== 'attract') this.startAttract();
+        this.show('campaign');
+        break;
+      case 'callsign': {
+        const v = (document.getElementById('callsign') as HTMLInputElement).value.trim().slice(0, 14);
+        if (!v) break;
+        s.callsign = v;
+        saveSettings(s);
+        this.show('campaign');
+        break;
+      }
       case 'brief': {
         this.eventId = d.id!;
-        const ev = findEvent(this.eventId)!.event;
+        const ev = nodeById(this.eventId)!;
         if (this.session?.mode !== 'attract' || this.session.race.track.def.id !== ev.track) {
           s.track = ev.track;
           this.startAttract();
@@ -591,10 +600,29 @@ class Game {
         this.show('brief');
         break;
       }
-      case 'start-event':
-        if (coarse) document.documentElement.requestFullscreen?.().catch(() => {});
-        void this.start('campaign', findEvent(this.eventId)!.event);
+      case 'story': {
+        const ev = nodeById(this.eventId)!;
+        this.story(`${ev.id}:pre`, ev.pre, () => this.show('brief'), true);
         break;
+      }
+      case 'start-event': {
+        if (coarse) document.documentElement.requestFullscreen?.().catch(() => {});
+        const ev = nodeById(this.eventId)!;
+        this.story(`${ev.id}:pre`, ev.pre, () => { void this.start('campaign', ev); });
+        break;
+      }
+      case 'next':
+      case 'skip': {
+        const dl = this.dialogue;
+        if (!dl) break;
+        if (d.action === 'next' && dl.i < dl.lines.length - 1) { dl.i++; this.show('dialogue'); break; }
+        this.dialogue = null;
+        dl.then();
+        break;
+      }
+      case 'hull': s.hull = d.id!; saveSettings(s); this.show('hangar'); break;
+      case 'color': s.color = Number(d.c); saveSettings(s); this.show('hangar'); break;
+      case 'back-hangar': this.show(this.hangarBack); break;
       case 'back-share':
         if (this.session && this.session.mode !== 'attract') this.show('results');
         else this.show('setup');
@@ -664,6 +692,17 @@ class Game {
       case 'unimport': this.imported.delete(getTrack(s.track).key); this.show('setup'); break;
     }
   }
+}
+
+function drawShip(c: HTMLCanvasElement, hullId: string, color: number, scale: number): void {
+  const ctx = c.getContext('2d');
+  if (!ctx) return;
+  ctx.clearRect(0, 0, c.width, c.height);
+  ctx.save();
+  ctx.translate(c.width / 2 + 4 * scale, c.height / 2);
+  ctx.scale(scale, scale);
+  drawHull2D(ctx, hullById(hullId), hex(color));
+  ctx.restore();
 }
 
 function drawPreview(c: HTMLCanvasElement, id: string): void {

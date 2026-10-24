@@ -7,6 +7,10 @@ export interface RacerSpec {
   name: string;
   color: number;
   kind: 'human' | 'bot';
+  /** Hull id (see ships.ts); cosmetic only. */
+  hull?: string;
+  /** Character id, for portraits and taunts. */
+  who?: string;
   /** Human input slot (0 or 1). */
   slot?: number;
   tier?: Tier;

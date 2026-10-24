@@ -29,7 +29,9 @@ Built with **Vite + TypeScript + PixiJS (WebGL)** and deployed to **GitHub Pages
 
 ## Campaign
 
-Four series: Rookie, Pro, Elite and Championship, 18 events in all. Each event awards up to 3★: podium places in races and eliminations, and bronze/silver/gold lap targets in time trials (the targets are the best laps of Easy, Hard and Insane bots). Stars unlock the next series.
+A branching tech-tree map across four series (Rookie, Pro, Elite, Championship), with 21 scored events plus an opening exhibition against the champion. Completing a node unlocks its neighbours, and star gates guard each new series. Events award up to 3★: podium places in races and eliminations, and bronze/silver/gold lap targets in time trials (the targets are the best laps of Easy, Hard and Insane bots).
+
+Short, skippable dialogue cards tell the story of your climb from licence to title. The cast: Wren (your crew chief), Dex Volta (the announcer), series bosses Kite, Rook and Halo, a crowd of pit pilots, and Sable Ardent, the aloof champion. Beating a boss unlocks their hull in the **Hangar**, where you pick your ship and colour.
 
 ## AI
 

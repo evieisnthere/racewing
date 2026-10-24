@@ -1,6 +1,7 @@
 import { Container, Graphics, Sprite, Texture } from 'pixi.js';
 import { clamp, mulberry32 } from '../core/math';
 import type { Race, Racer } from '../core/race';
+import { hullById, type Hull } from '../core/ships';
 import type { Track } from '../core/track';
 
 export interface Pose { x: number; y: number; angle: number }
@@ -154,16 +155,34 @@ class TrackLayer extends Container {
 }
 
 class ShipSprite extends Container {
-  readonly flame = new Graphics();
-  constructor(color: number, alpha = 1) {
+  readonly flames: Graphics[] = [];
+  constructor(hull: Hull, color: number, alpha = 1) {
     super();
-    const glow = new Graphics().poly([20, 0, -13, -12, -7, 0, -13, 12]).fill({ color, alpha: 0.18 });
+    const scale = 1;
+    const sc = (pts: number[]) => pts.map((v) => v * scale);
+    const glow = new Graphics().poly(sc(hull.body)).stroke({ width: 7, color, alpha: 0.16, join: 'round' });
     glow.blendMode = 'add';
-    this.flame.poly([-7, -4, -24, 0, -7, 4]).fill({ color: 0xffffff, alpha: 0.9 });
-    this.flame.blendMode = 'add';
-    const body = new Graphics().poly([14, 0, -9, -8, -5, 0, -9, 8]).fill({ color: 0x05060b }).poly([14, 0, -9, -8, -5, 0, -9, 8]).stroke({ width: 2.2, color, join: 'round' });
-    this.addChild(glow, this.flame, body);
+    this.addChild(glow);
+    for (const [x, y] of hull.engines) {
+      const f = new Graphics().poly([0, -2.6, -18, 0, 0, 2.6]).fill({ color: 0xffffff, alpha: 0.9 });
+      f.position.set(x * scale, y * scale);
+      f.blendMode = 'add';
+      this.flames.push(f);
+      this.addChild(f);
+    }
+    const body = new Graphics().poly(sc(hull.body)).fill({ color: 0x070912 }).poly(sc(hull.body)).stroke({ width: 1.8, color, join: 'round' });
+    for (const d of hull.details) body.moveTo(d[0] * scale, d[1] * scale).lineTo(d[2] * scale, d[3] * scale).stroke({ width: 1, color, alpha: 0.5 });
+    body.poly(sc(hull.cockpit)).fill({ color, alpha: 0.9 });
+    this.addChild(body);
     this.alpha = alpha;
+  }
+
+  flame(on: boolean, len: number, tint: number): void {
+    for (const f of this.flames) {
+      f.visible = on;
+      f.scale.x = len;
+      f.tint = tint;
+    }
   }
 }
 
@@ -199,14 +218,14 @@ export class View {
     const trailLayer = new Container();
     trailLayer.blendMode = 'add';
     this.world.addChild(trailLayer);
-    this.ghost = new ShipSprite(0xffffff, 0.35);
+    this.ghost = new ShipSprite(hullById(follow.spec.hull ?? 'dart'), 0xffffff, 0.35);
     this.ghost.visible = false;
     this.world.addChild(this.ghost);
     for (const r of race.racers) {
       const g = new Graphics();
       trailLayer.addChild(g);
       this.trails.push({ pts: [], g });
-      const s = new ShipSprite(r.spec.color);
+      const s = new ShipSprite(hullById(r.spec.hull ?? 'dart'), r.spec.color);
       this.ships.push(s);
       this.world.addChild(s);
     }
@@ -258,9 +277,8 @@ export class View {
       }
       sp.position.set(s.x, s.y);
       sp.rotation = s.angle;
-      sp.flame.visible = s.throttle > 0;
-      sp.flame.scale.x = 0.6 + Math.random() * 0.5 + (s.boost > 0 || s.scrape > 0 ? 0.8 : 0);
-      sp.flame.tint = s.boost > 0 ? 0xffe14d : s.scrape > 0 ? 0xff7a3d : r.spec.color;
+      sp.flame(s.throttle > 0 || s.scrape > 0, 0.6 + Math.random() * 0.5 + (s.boost > 0 || s.scrape > 0 ? 0.8 : 0),
+        s.boost > 0 ? 0xffe14d : s.scrape > 0 ? 0xff7a3d : r.spec.color);
 
       const trail = this.trails[i];
       const pts = trail.pts;
