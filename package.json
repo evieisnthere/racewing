@@ -1,0 +1,22 @@
+{
+  "name": "racewing",
+  "private": true,
+  "version": "0.1.0",
+  "description": "A Data Wing-style neon racer: gravity zones, wall-scrape boosting, two-button steering, AI bots, ghosts and split-screen.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "sim": "tsx scripts/sim.ts"
+  },
+  "dependencies": {
+    "pixi.js": "8.21.0"
+  },
+  "devDependencies": {
+    "tsx": "4.23.15",
+    "typescript": "5.9.3",
+    "vite": "6.4.4"
+  }
+}
