@@ -23,13 +23,15 @@ export interface Skill {
   mistake: number;
   /** How hard the bot steers for boost pads (0..1). */
   padSeek: number;
+  /** Engine power multiplier. */
+  power: number;
 }
 
 export const SKILLS: Record<Tier, Skill> = {
-  easy: { react: 0.11, deadzone: 0.14, lookahead: 0.42, latAccel: 1500, lineBlend: 0.35, margin: 40, noise: 0.35, mistake: 0.05, padSeek: 0 },
-  medium: { react: 0.07, deadzone: 0.09, lookahead: 0.36, latAccel: 2100, lineBlend: 0.65, margin: 26, noise: 0.2, mistake: 0.02, padSeek: 0.5 },
-  hard: { react: 0.04, deadzone: 0.06, lookahead: 0.32, latAccel: 2700, lineBlend: 0.9, margin: 14, noise: 0.1, mistake: 0.006, padSeek: 1 },
-  insane: { react: 0.02, deadzone: 0.035, lookahead: 0.3, latAccel: 3300, lineBlend: 1, margin: 4, noise: 0.04, mistake: 0, padSeek: 1 },
+  easy: { react: 0.11, deadzone: 0.14, lookahead: 0.42, latAccel: 1500, lineBlend: 0.35, margin: 40, noise: 0.35, mistake: 0.05, padSeek: 0, power: 0.86 },
+  medium: { react: 0.07, deadzone: 0.09, lookahead: 0.36, latAccel: 2100, lineBlend: 0.65, margin: 26, noise: 0.2, mistake: 0.02, padSeek: 0.5, power: 0.93 },
+  hard: { react: 0.04, deadzone: 0.06, lookahead: 0.32, latAccel: 2700, lineBlend: 0.9, margin: 14, noise: 0.1, mistake: 0.006, padSeek: 1, power: 0.98 },
+  insane: { react: 0.02, deadzone: 0.035, lookahead: 0.3, latAccel: 3300, lineBlend: 1, margin: 4, noise: 0.04, mistake: 0, padSeek: 1, power: 1.02 },
 };
 
 export const TIER_NAMES: Record<Tier, string> = { easy: 'Easy', medium: 'Medium', hard: 'Hard', insane: 'Insane' };

@@ -14,6 +14,8 @@ export interface TrackDef {
   accent: number;
   /** Default full width. */
   width: number;
+  /** Multiplier applied to control points (and absolute well positions), not widths. */
+  scale?: number;
   /** Closed loop of control points: [x, y, width?]. The first point is the start line; the track runs toward the second. */
   points: number[][];
   gravity?: GravityZoneDef[];
@@ -28,6 +30,12 @@ export interface Pad { i0: number; i1: number; lat: number; halfWidth: number }
 
 export const SPACING = 16;
 const CELL = 96;
+
+function hash(s: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
+  return h >>> 0;
+}
 
 function centripetal(p0: number[], p1: number[], p2: number[], p3: number[], t: number, out: number[]): void {
   const d = (a: number[], b: number[]) => Math.max(1e-3, Math.sqrt(Math.hypot(b[0] - a[0], b[1] - a[1])));
@@ -61,6 +69,8 @@ function curvature(xs: Float64Array, ys: Float64Array, k: number): Float64Array 
 
 export class Track {
   readonly def: TrackDef;
+  /** id plus a hash of the definition, so records and ghosts from an older layout are not reused. */
+  readonly key: string;
   readonly n: number;
   readonly length: number;
   readonly cx: Float64Array; readonly cy: Float64Array;
@@ -87,14 +97,16 @@ export class Track {
 
   constructor(def: TrackDef) {
     this.def = def;
+    this.key = def.id + '@' + hash(JSON.stringify(def)).toString(36);
     const raw: number[][] = [];
-    const P = def.points;
+    const sc = def.scale ?? 1;
+    const P = def.points.map((p) => [p[0] * sc, p[1] * sc, p[2] ?? def.width]);
     const m = P.length;
     const steps = 48;
     const tmp = [0, 0];
     for (let i = 0; i < m; i++) {
       const p0 = P[(i - 1 + m) % m], p1 = P[i], p2 = P[(i + 1) % m], p3 = P[(i + 2) % m];
-      const w1 = p1[2] ?? def.width, w2 = p2[2] ?? def.width;
+      const w1 = p1[2], w2 = p2[2];
       for (let k = 0; k < steps; k++) {
         const t = k / steps;
         centripetal(p0, p1, p2, p3, t, tmp);
@@ -169,8 +181,8 @@ export class Track {
     for (const w of def.wells ?? []) {
       const i = idx(w.at);
       this.wells.push({
-        x: w.x ?? this.cx[i] + this.nx[i] * this.hw[i] * w.offset,
-        y: w.y ?? this.cy[i] + this.ny[i] * this.hw[i] * w.offset,
+        x: w.x !== undefined ? w.x * sc : this.cx[i] + this.nx[i] * this.hw[i] * w.offset,
+        y: w.y !== undefined ? w.y * sc : this.cy[i] + this.ny[i] * this.hw[i] * w.offset,
         radius: w.radius,
         strength: w.strength,
       });
@@ -195,7 +207,7 @@ export class Track {
       const y0 = Math.floor(Math.min(ay, by) / CELL), y1 = Math.floor(Math.max(ay, by) / CELL);
       for (let gx = x0; gx <= x1; gx++) {
         for (let gy = y0; gy <= y1; gy++) {
-          const key = this.key(gx, gy);
+          const key = this.cellKey(gx, gy);
           let list = this.grid.get(key);
           if (!list) this.grid.set(key, (list = []));
           list.push(id);
@@ -231,7 +243,7 @@ export class Track {
     return off;
   }
 
-  private key(gx: number, gy: number): number {
+  private cellKey(gx: number, gy: number): number {
     return (gx + 32768) * 65536 + (gy + 32768);
   }
 
@@ -243,7 +255,7 @@ export class Track {
     const gx = Math.floor(x / CELL), gy = Math.floor(y / CELL);
     for (let ox = -1; ox <= 1; ox++) {
       for (let oy = -1; oy <= 1; oy++) {
-        const list = this.grid.get(this.key(gx + ox, gy + oy));
+        const list = this.grid.get(this.cellKey(gx + ox, gy + oy));
         if (!list) continue;
         for (const s of list) {
           if (this.stamp[s] === id) continue;
@@ -273,6 +285,21 @@ export class Track {
       if (d < bestD) { bestD = d; best = i; }
     }
     return best;
+  }
+
+  /** Pairs of far-apart samples whose walls come too close (overlapping or touching track sections). */
+  clearanceIssues(gap = 60): { i: number; j: number; d: number }[] {
+    const out: { i: number; j: number; d: number }[] = [];
+    const n = this.n;
+    const skip = Math.ceil(900 / SPACING);
+    for (let i = 0; i < n; i += 2) {
+      for (let j = i + skip; j < n; j += 2) {
+        if (n - (j - i) < skip) continue;
+        const d = Math.hypot(this.cx[i] - this.cx[j], this.cy[i] - this.cy[j]);
+        if (d < this.hw[i] + this.hw[j] + gap) { out.push({ i, j, d }); i += 10; break; }
+      }
+    }
+    return out;
   }
 
   lateral(x: number, y: number, i: number): number {

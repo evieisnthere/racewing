@@ -12,11 +12,13 @@ export interface Settings {
   track: string;
   name: string;
   name2: string;
+  music: number;
+  sfx: number;
 }
 
 const DEFAULTS: Settings = {
   scheme: 'thrust', rubberBand: true, collisions: true, ghosts: true,
-  laps: 3, bots: 5, tier: 'medium', track: 'pulse', name: 'Player 1', name2: 'Player 2',
+  laps: 3, bots: 5, tier: 'medium', track: 'pulse', name: 'Player 1', name2: 'Player 2', music: 0.6, sfx: 0.8,
 };
 
 const PREFIX = 'racewing.';
@@ -40,10 +42,19 @@ export function saveSettings(s: Settings): void {
   set('settings', JSON.stringify(s));
 }
 
+/** Keyed by Track.key (id + layout hash), so a changed layout starts fresh. */
 export const ghostCode = (trackId: string): string | null => get(`ghost.${trackId}`);
 export const saveGhostCode = (trackId: string, code: string | null): void => set(`ghost.${trackId}`, code);
 export const bestLap = (trackId: string): number => Number(get(`best.${trackId}`) ?? Infinity);
 export const saveBestLap = (trackId: string, t: number): void => set(`best.${trackId}`, String(t));
+
+export function loadProgress(): Record<string, number> {
+  try { return JSON.parse(get('campaign') ?? '{}'); } catch { return {}; }
+}
+
+export function saveProgress(p: Record<string, number>): void {
+  set('campaign', JSON.stringify(p));
+}
 
 export function clearAll(): void {
   try {

@@ -20,12 +20,15 @@ export interface RaceConfig {
   scheme: Scheme;
   rubberBand: boolean;
   collisions: boolean;
+  /** Last place is knocked out each time the leader starts a new lap; runs until one ship remains. */
+  elimination?: boolean;
   seed?: number;
 }
 
 export type RaceEvent =
   | { type: 'lap'; racer: Racer; lap: number; time: number; best: boolean; ghost: Ghost | null }
   | { type: 'finish'; racer: Racer; place: number }
+  | { type: 'out'; racer: Racer; place: number }
   | { type: 'go' };
 
 export interface Buttons { left: boolean; right: boolean }
@@ -39,6 +42,9 @@ export class Racer {
   bestLap = Infinity;
   finished = false;
   finishTime = Infinity;
+  /** Knocked out in an elimination race. */
+  out = false;
+  outTime = Infinity;
   place = 0;
   readonly bot: Bot | null;
   /** Takes over a human's ship after they finish. */
@@ -70,6 +76,7 @@ export class Race {
   state: 'countdown' | 'racing' | 'finished' = 'countdown';
   finishedAt = Infinity;
   private finishCount = 0;
+  private leaderLap = 1;
 
   constructor(readonly config: RaceConfig) {
     this.track = config.track;
@@ -103,6 +110,7 @@ export class Race {
 
     this.applyRubberBand();
     for (const r of this.racers) {
+      if (r.out) continue;
       let b: Buttons;
       if (r.autopilot) b = r.autopilot.think(r.ship, t, dt, this.time);
       else if (r.bot) b = r.bot.think(r.ship, t, dt, this.time);
@@ -115,14 +123,16 @@ export class Race {
       if (r.recorder && !r.finished) r.recorder.sample(r.ship, this.time - r.lapStart);
     }
     if (this.config.collisions) {
-      for (let i = 0; i < this.racers.length; i++) {
-        for (let j = i + 1; j < this.racers.length; j++) collideShips(this.racers[i].ship, this.racers[j].ship);
+      const live = this.racers.filter((r) => !r.out);
+      for (let i = 0; i < live.length; i++) {
+        for (let j = i + 1; j < live.length; j++) collideShips(live[i].ship, live[j].ship);
       }
     }
     this.rank();
-    if (this.state === 'racing' && this.config.laps > 0) {
+    if (this.config.elimination) this.eliminate();
+    if (this.state === 'racing' && (this.config.laps > 0 || this.config.elimination)) {
       const waitingOn = this.humans.length ? this.humans : this.racers;
-      if (waitingOn.every((r) => r.finished)) { this.state = 'finished'; this.finishedAt = this.time; }
+      if (waitingOn.every((r) => r.finished || r.out)) { this.state = 'finished'; this.finishedAt = this.time; }
     }
   }
 
@@ -138,7 +148,7 @@ export class Race {
           r.lapTimes.push(lapTime);
           const best = lapTime < r.bestLap;
           if (best) r.bestLap = lapTime;
-          const ghost = r.recorder && best ? r.recorder.finish(this.track.def.id, lapTime, r.spec.name) : null;
+          const ghost = r.recorder && best ? r.recorder.finish(this.track.key, lapTime, r.spec.name) : null;
           this.events.push({ type: 'lap', racer: r, lap: r.lap - 1, time: lapTime, best, ghost });
         }
         r.lapStart = this.time;
@@ -156,10 +166,33 @@ export class Race {
     }
   }
 
+  private eliminate(): void {
+    const live = this.racers.filter((r) => !r.out && !r.finished);
+    const lead = Math.max(...live.map((r) => r.maxLap));
+    if (lead <= this.leaderLap) return;
+    this.leaderLap = lead;
+    if (live.length > 1) {
+      const last = live.reduce((a, b) => (a.place > b.place ? a : b));
+      last.out = true;
+      last.outTime = this.time;
+      last.place = live.length;
+      this.events.push({ type: 'out', racer: last, place: last.place });
+    }
+    const left = live.filter((r) => !r.out);
+    if (left.length === 1) {
+      const w = left[0];
+      w.finished = true;
+      w.finishTime = this.time;
+      w.place = 1;
+      if (w.human) w.autopilot = new Bot('medium', 99);
+      this.events.push({ type: 'finish', racer: w, place: 1 });
+    }
+  }
+
   private applyRubberBand(): void {
     const humans = this.humans;
     if (!this.config.rubberBand || humans.length === 0) {
-      for (const r of this.racers) r.ship.thrustMul = 1;
+      for (const r of this.racers) r.ship.thrustMul = r.bot ? r.bot.skill.power : 1;
       return;
     }
     const n = this.track.n;
@@ -168,15 +201,18 @@ export class Race {
       if (!r.bot) continue;
       const diff = ((r.progress(n) - lead) * this.track.length) / n;
       const target = diff > 0 ? 1 - Math.min(0.18, (diff / 2500) * 0.18) : 1 + Math.min(0.12, (-diff / 2500) * 0.12);
-      r.ship.thrustMul += (target - r.ship.thrustMul) * 0.01;
+      r.ship.thrustMul += (target * r.bot.skill.power - r.ship.thrustMul) * 0.01;
     }
   }
 
   private rank(): void {
     const n = this.track.n;
+    const group = (r: Racer) => (r.finished ? 0 : r.out ? 2 : 1);
     const order = [...this.racers].sort((a, b) => {
-      if (a.finished !== b.finished) return a.finished ? -1 : 1;
-      if (a.finished) return a.finishTime - b.finishTime;
+      const ga = group(a), gb = group(b);
+      if (ga !== gb) return ga - gb;
+      if (ga === 0) return a.finishTime - b.finishTime;
+      if (ga === 2) return b.outTime - a.outTime;
       return b.progress(n) - a.progress(n);
     });
     order.forEach((r, i) => { r.place = i + 1; });

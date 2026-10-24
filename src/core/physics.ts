@@ -2,24 +2,29 @@ import { clamp, smoothstep, wrapAngle } from './math';
 import type { Track } from './track';
 
 export const PHYS = {
-  thrust: 950,
-  drag: 1.05,
+  thrust: 600,
+  drag: 1.0,
   /** Lateral velocity decay rate; some of the bled speed is fed forward. */
-  grip: 4.2,
-  gripConvert: 0.35,
-  turnRate: 3.9,
-  turnAccel: 40,
-  brake: 1500,
-  reverse: 420,
-  maxReverse: 260,
+  grip: 4.5,
+  gripConvert: 0.3,
+  turnRate: 3.3,
+  turnAccel: 30,
+  brake: 1000,
+  reverse: 300,
+  maxReverse: 180,
   radius: 9,
-  /** sin(impact angle) below which wall contact is a scrape rather than a hit. */
+  /** sin(impact angle) below which wall contact is a slide rather than a hit. */
   scrapeAngle: 0.42,
-  scrapeAccel: 700,
+  /** Speed lost per second while sliding along a wall nose-first. */
+  wallFriction: 0.5,
+  /** Grinding: tail (engine flame) at the wall, nose angled away from it. */
+  grindReach: 12,
+  grindMinAngle: 0.03,
+  scrapeAccel: 380,
   restitution: 0.35,
   hitLoss: 0.5,
-  padBoost: 420,
-  padMax: 1700,
+  padBoost: 260,
+  padMax: 1000,
   padCooldown: 0.5,
   shipBounce: 0.6,
 };
@@ -148,6 +153,7 @@ export function stepShip(s: Ship, intent: Intent, track: Track, dt: number): voi
   collideWalls(s, track);
   s.idx = track.nearest(s.x, s.y, s.idx);
   contain(s, track);
+  grind(s, track);
 }
 
 function collideWalls(s: Ship, track: Track): void {
@@ -177,16 +183,13 @@ function collideWalls(s: Ship, track: Track): void {
 function respond(s: Ship, nx: number, ny: number, cx: number, cy: number): void {
   const vn = s.vx * nx + s.vy * ny;
   const sp = Math.hypot(s.vx, s.vy);
-  if (vn >= 0) {
-    // Resting contact while sliding along still counts as a scrape.
-    if (sp > 150 && vn < 40) markScrape(s, nx, ny, cx, cy);
-    return;
-  }
+  if (vn >= 0) return;
   const ratio = -vn / Math.max(sp, 1);
   const tx = s.vx - vn * nx, ty = s.vy - vn * ny;
   if (ratio < PHYS.scrapeAngle) {
-    s.vx = tx; s.vy = ty;
-    if (sp > 120) markScrape(s, nx, ny, cx, cy);
+    // Nose-first slide: rub off a little speed. Boost only comes from grinding (see grind()).
+    const keep = 1 - PHYS.wallFriction / 240;
+    s.vx = tx * keep; s.vy = ty * keep;
   } else {
     const loss = smoothstep(PHYS.scrapeAngle, 1, ratio) * PHYS.hitLoss;
     s.vx = tx * (1 - loss) - vn * nx * PHYS.restitution;
@@ -195,9 +198,30 @@ function respond(s: Ship, nx: number, ny: number, cx: number, cy: number): void 
   }
 }
 
-function markScrape(s: Ship, nx: number, ny: number, cx: number, cy: number): void {
-  s.scrape = 0.08;
-  s.scrapeX = cx; s.scrapeY = cy; s.scrapeNx = nx; s.scrapeNy = ny;
+/**
+ * Grinding: the tail (where the engine flame is) is touching the wall and the nose points away from it,
+ * so the exhaust is aimed at the wall. That's the only wall contact that boosts.
+ */
+function grind(s: Ship, track: Track): void {
+  const hx = Math.cos(s.angle), hy = Math.sin(s.angle);
+  const sp = Math.hypot(s.vx, s.vy);
+  if (sp < 120 || (s.vx * hx + s.vy * hy) < 0) return;
+  const tailX = s.x - hx * PHYS.radius, tailY = s.y - hy * PHYS.radius;
+  const reach = PHYS.grindReach;
+  let best = reach * reach, bx = 0, by = 0, bnx = 0, bny = 0;
+  for (const id of track.query(tailX, tailY)) {
+    const g = track.segments[id];
+    const ex = g.bx - g.ax, ey = g.by - g.ay;
+    const l2 = ex * ex + ey * ey;
+    const t = l2 > 0 ? clamp(((tailX - g.ax) * ex + (tailY - g.ay) * ey) / l2, 0, 1) : 0;
+    const qx = g.ax + ex * t, qy = g.ay + ey * t;
+    const d2 = (tailX - qx) ** 2 + (tailY - qy) ** 2;
+    if (d2 < best) { best = d2; bx = qx; by = qy; bnx = g.nx; bny = g.ny; }
+  }
+  if (best >= reach * reach) return;
+  if (hx * bnx + hy * bny < PHYS.grindMinAngle) return;
+  s.scrape = 0.06;
+  s.scrapeX = bx; s.scrapeY = by; s.scrapeNx = bnx; s.scrapeNy = bny;
 }
 
 /** Fallback if a ship ever tunnels through a wall: put it back on the track. */

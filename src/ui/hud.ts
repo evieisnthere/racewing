@@ -13,6 +13,7 @@ export class Hud {
   private speed: HTMLElement;
   private flashEl: HTMLElement;
   private count: HTMLElement;
+  private infoEl: HTMLElement;
   private flashTimer = 0;
   private cache = new Map<HTMLElement, string>();
 
@@ -27,6 +28,7 @@ export class Hud {
         <div class="hud-time"></div>
         <div class="hud-delta"></div>
         <div class="hud-best"></div>
+        <div class="hud-info"></div>
       </div>
       <div class="hud-speed"><div></div></div>
       <div class="hud-flash"></div>
@@ -34,6 +36,7 @@ export class Hud {
     const q = (s: string) => this.el.querySelector(s) as HTMLElement;
     this.pos = q('.hud-pos'); this.lap = q('.hud-lap'); this.time = q('.hud-time'); this.best = q('.hud-best');
     this.delta = q('.hud-delta'); this.speed = q('.hud-speed > div'); this.flashEl = q('.hud-flash'); this.count = q('.hud-count');
+    this.infoEl = q('.hud-info');
     this.el.style.setProperty('--racer', '#' + racer.spec.color.toString(16).padStart(6, '0'));
     parent.appendChild(this.el);
   }
@@ -41,6 +44,10 @@ export class Hud {
   layout(x: number, y: number, w: number, h: number): void {
     Object.assign(this.el.style, { left: x + 'px', top: y + 'px', width: w + 'px', height: h + 'px' });
     this.el.classList.toggle('compact', Math.min(w, h) < 520);
+  }
+
+  info(html: string): void {
+    this.infoEl.innerHTML = html;
   }
 
   flash(text: string, cls = ''): void {
@@ -61,13 +68,19 @@ export class Hud {
     if (this.timeTrial) {
       this.text(this.pos, r.lap < 1 ? 'TIME TRIAL' : `LAP ${r.lap}`);
       this.text(this.lap, r.lapTimes.length ? `last ${formatTime(r.lapTimes[r.lapTimes.length - 1])}` : '');
+    } else if (race.config.elimination) {
+      const alive = race.racers.filter((x) => !x.out).length;
+      this.text(this.pos, `${ordinal(r.place)}`);
+      this.pos.dataset.of = `/${race.racers.length}`;
+      this.text(this.lap, r.out ? 'KNOCKED OUT' : r.finished ? 'WINNER' : `LAP ${Math.max(1, r.lap)} · ${alive} LEFT`);
     } else {
       this.text(this.pos, `${ordinal(r.place)}`);
       this.pos.dataset.of = `/${race.racers.length}`;
       this.text(this.lap, r.finished ? 'FINISHED' : `LAP ${Math.max(1, Math.min(r.lap, laps))}/${laps}`);
     }
     const lapTime = r.lap >= 1 && !r.finished ? Math.max(0, race.time - r.lapStart) : 0;
-    this.text(this.time, r.finished ? formatTime(r.finishTime) : this.timeTrial ? formatTime(lapTime) : formatTime(Math.max(0, race.time)));
+    const end = r.finished ? r.finishTime : r.out ? r.outTime : NaN;
+    this.text(this.time, !isNaN(end) ? formatTime(end) : this.timeTrial ? formatTime(lapTime) : formatTime(Math.max(0, race.time)));
     this.text(this.best, isFinite(r.bestLap) ? `best ${formatTime(r.bestLap)}` : '');
     if (ghostDelta === null) this.text(this.delta, '');
     else {
@@ -75,7 +88,7 @@ export class Hud {
       this.delta.className = 'hud-delta ' + (ghostDelta > 0 ? 'slow' : 'fast');
     }
     const sp = Math.hypot(r.ship.vx, r.ship.vy);
-    this.speed.style.width = Math.min(100, (sp / 1500) * 100).toFixed(1) + '%';
+    this.speed.style.width = Math.min(100, (sp / 950) * 100).toFixed(1) + '%';
     this.speed.classList.toggle('boost', r.ship.scrape > 0 || r.ship.boost > 0);
 
     if (race.time < 0) {

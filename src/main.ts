@@ -1,24 +1,30 @@
 import { Application } from 'pixi.js';
 import './style.css';
+import { sound } from './audio';
 import { Bot, TIER_NAMES, type Tier } from './core/ai';
+import { CHAPTERS, findEvent, KIND_LABEL, MAX_STARS, placeStars, ttStars, ttTargets, type CampaignEvent } from './core/campaign';
 import { decodeGhost, encodeGhost, ghostPose, GHOST_HZ, type Ghost } from './core/ghost';
 import { formatTime } from './core/math';
-import { Race, STEP, type RacerSpec } from './core/race';
+import { Race, STEP, type Racer, type RacerSpec } from './core/race';
 import { getTrack, TRACK_DEFS } from './core/tracks';
 import { Input } from './input';
 import { View } from './render/view';
-import { bestLap, clearAll, ghostCode, loadSettings, saveBestLap, saveGhostCode, saveSettings } from './storage';
+import {
+  bestLap, clearAll, ghostCode, loadProgress, loadSettings, saveBestLap, saveGhostCode, saveProgress, saveSettings,
+} from './storage';
 import { Hud } from './ui/hud';
 
-type Mode = 'race' | 'tt' | 'split' | 'attract';
+type Mode = 'race' | 'tt' | 'split' | 'attract' | 'campaign';
 
 const COLORS = [0x2ef2ff, 0xff3df2, 0xffe14d, 0x3dff9a, 0xff7a3d, 0xb06bff];
 const BOT_NAMES = ['Vex', 'Nova', 'Kite', 'Rook', 'Halo', 'Juno'];
 const MIXED: Tier[] = ['insane', 'hard', 'hard', 'medium', 'medium', 'easy'];
-const MODE_TITLES: Record<Mode, string> = { race: 'Race', tt: 'Time Trial', split: 'Split-screen', attract: '' };
+const MODE_TITLES: Record<Mode, string> = { race: 'Quick Race', tt: 'Time Trial', split: 'Split-screen', attract: '', campaign: 'Campaign' };
 
 interface Session {
   mode: Mode;
+  event: CampaignEvent | null;
+  targets: [number, number, number] | null;
   race: Race;
   views: View[];
   huds: Hud[];
@@ -27,25 +33,34 @@ interface Session {
   paused: boolean;
   acc: number;
   resultsShown: boolean;
+  lastCount: number;
+  boost: number[];
+  finalLap: boolean;
 }
 
 const hex = (c: number) => '#' + c.toString(16).padStart(6, '0');
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+const ordinal = (n: number) => n + (['st', 'nd', 'rd'][n - 1] ?? 'th');
+const stars = (n: number) => `<span class="stars">${'★'.repeat(n)}<i>${'★'.repeat(3 - n)}</i></span>`;
 const coarse = matchMedia('(pointer: coarse)').matches;
-/** `?autopilot` lets an insane bot drive the human ships (demo/testing). */
+/** `?autopilot` lets an Insane bot drive the human ships (demo/testing). */
 const AUTOPILOT = new URLSearchParams(location.search).has('autopilot');
 
 class Game {
   private app = new Application();
   private input!: Input;
   private settings = loadSettings();
+  private progress = loadProgress();
   private session: Session | null = null;
   private menu = document.getElementById('menu') as HTMLDivElement;
   private hudLayer = document.getElementById('hud') as HTMLDivElement;
   private touchHint = document.getElementById('touch') as HTMLDivElement;
   private pauseBtn = document.getElementById('pause-btn') as HTMLButtonElement;
   private setupMode: Mode = 'race';
+  private eventId = 'r1';
   private imported = new Map<string, Ghost>();
+  /** Stars earned by the last campaign event, and whether it beat the previous best. */
+  private earned: { stars: number; improved: boolean; unlocked: string | null } | null = null;
 
   async init(): Promise<void> {
     await this.app.init({
@@ -58,7 +73,17 @@ class Game {
     this.input.handlers(() => this.togglePause(), (slot) => this.respawn(slot));
     this.menu.addEventListener('click', (e) => this.onClick(e));
     this.menu.addEventListener('change', (e) => this.onChange(e));
+    this.menu.addEventListener('input', (e) => this.onChange(e));
     this.pauseBtn.addEventListener('click', () => this.togglePause());
+    const unlock = () => {
+      sound.unlock();
+      sound.setVolumes(this.settings.music, this.settings.sfx);
+    };
+    addEventListener('pointerdown', unlock);
+    addEventListener('keydown', (e) => {
+      unlock();
+      if (e.code === 'KeyM' && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)) sound.toggleMute();
+    });
     addEventListener('resize', () => requestAnimationFrame(() => this.layout()));
     document.addEventListener('visibilitychange', () => {
       if (document.hidden && this.session && this.session.mode !== 'attract' && !this.session.paused) this.togglePause();
@@ -74,53 +99,66 @@ class Game {
     void this.start('attract');
   }
 
-  private async start(mode: Mode): Promise<void> {
+  private async start(mode: Mode, event: CampaignEvent | null = null): Promise<void> {
     const s = this.settings;
-    const track = getTrack(s.track);
+    const track = getTrack(event?.track ?? s.track);
     const humans = mode === 'split' ? 2 : mode === 'attract' ? 0 : 1;
-    const botCount = mode === 'tt' ? 0 : mode === 'attract' ? 6 : Math.min(s.bots, 6 - humans);
     const racers: RacerSpec[] = [];
-    for (let i = 0; i < botCount; i++) {
-      const tier = mode === 'attract' ? MIXED[i] : s.tier === 'mixed' ? MIXED[i] : s.tier;
-      racers.push({ name: BOT_NAMES[i], color: COLORS[(i + humans) % COLORS.length], kind: 'bot', tier });
+    if (event) {
+      event.field.forEach((o, i) => racers.push({ name: o.name, color: COLORS[(i + 1) % COLORS.length], kind: 'bot', tier: o.tier }));
+    } else {
+      const botCount = mode === 'tt' ? 0 : mode === 'attract' ? 6 : Math.min(s.bots, 6 - humans);
+      for (let i = 0; i < botCount; i++) {
+        const tier = mode === 'attract' || s.tier === 'mixed' ? MIXED[i] : s.tier;
+        racers.push({ name: BOT_NAMES[i], color: COLORS[(i + humans) % COLORS.length], kind: 'bot', tier });
+      }
     }
     for (let i = 0; i < humans; i++) {
       racers.push({ name: i === 0 ? s.name : s.name2, color: COLORS[i], kind: 'human', slot: i });
     }
+    const timeTrial = mode === 'tt' || event?.kind === 'tt';
     const race = new Race({
       track,
-      laps: mode === 'tt' || mode === 'attract' ? 0 : s.laps,
+      laps: event ? (event.kind === 'elim' ? 0 : event.laps) : timeTrial || mode === 'attract' ? 0 : s.laps,
+      elimination: event?.kind === 'elim',
       racers,
       scheme: s.scheme,
       rubberBand: mode !== 'attract' && s.rubberBand,
-      collisions: mode !== 'tt' && s.collisions,
+      collisions: !timeTrial && s.collisions,
       seed: Math.floor(Math.random() * 1e6),
     });
-
     if (AUTOPILOT) race.humans.forEach((h, i) => { h.autopilot = new Bot('insane', 5 + i); });
+
     let ghost: Ghost | null = null;
     if (mode !== 'attract' && s.ghosts) {
-      ghost = this.imported.get(track.def.id) ?? null;
-      const code = ghostCode(track.def.id);
+      ghost = this.imported.get(track.key) ?? null;
+      const code = ghostCode(track.key);
       if (!ghost && code) { try { ghost = await decodeGhost(code); } catch { ghost = null; } }
     }
+    const targets = event?.kind === 'tt' ? ttTargets(track.def.id) : null;
 
     this.end();
     const session: Session = {
-      mode, race, views: [], huds: [], ghost, ghostTimes: ghost ? this.ghostTimes(ghost) : null,
-      paused: false, acc: 0, resultsShown: false,
+      mode, event, targets, race, views: [], huds: [], ghost, ghostTimes: ghost ? this.ghostTimes(ghost) : null,
+      paused: false, acc: 0, resultsShown: false, lastCount: 99, boost: [0, 0], finalLap: false,
     };
     const follow = mode === 'attract' ? [race.racers[0]] : race.humans;
     for (const r of follow) {
       const view = new View(race, r, () => this.ghostPoseFor(session, r));
       this.app.stage.addChild(view.root);
       session.views.push(view);
-      if (mode !== 'attract') session.huds.push(new Hud(this.hudLayer, race, r, mode === 'tt'));
+      if (mode !== 'attract') {
+        const hud = new Hud(this.hudLayer, race, r, timeTrial);
+        if (targets) hud.info(`<span class="medal b"></span>${targets[0].toFixed(1)}<span class="medal s"></span>${targets[1].toFixed(1)}<span class="medal g"></span>${targets[2].toFixed(1)}`);
+        session.huds.push(hud);
+      }
     }
     this.session = session;
     this.input.clear();
     this.layout();
     const racing = mode !== 'attract';
+    sound.setEngines(racing ? humans : 0);
+    sound.setIntensity(racing ? 0.6 : 0.25);
     this.pauseBtn.classList.toggle('show', racing && coarse);
     this.touchHint.classList.toggle('show', racing && coarse && mode !== 'split');
     this.touchHint.querySelector('p')!.textContent = s.scheme === 'thrust' ? 'hold both to brake / reverse' : 'hold both to thrust';
@@ -136,7 +174,7 @@ class Game {
   }
 
   private ghostTimes(g: Ghost): Float32Array {
-    const t = getTrack(g.trackId);
+    const t = getTrack(g.trackId.split('@')[0]);
     const out = new Float32Array(t.n).fill(NaN);
     let idx = -1;
     for (let k = 0; k < g.xs.length; k++) {
@@ -149,8 +187,8 @@ class Game {
     return out;
   }
 
-  private ghostPoseFor(s: Session, r: { lap: number; lapStart: number; finished: boolean }) {
-    if (!s.ghost || s.ghost.trackId !== s.race.track.def.id || r.lap < 1 || r.finished) return null;
+  private ghostPoseFor(s: Session, r: Racer) {
+    if (!s.ghost || s.ghost.trackId !== s.race.track.key || r.lap < 1 || r.finished || r.out) return null;
     return ghostPose(s.ghost, s.race.time - r.lapStart);
   }
 
@@ -170,24 +208,47 @@ class Game {
   private frame(dt: number): void {
     const s = this.session;
     if (!s) return;
+    const race = s.race;
     if (!s.paused) {
       s.acc += dt;
       let steps = 0;
-      const players = s.race.humans.length;
+      const players = race.humans.length;
       while (s.acc >= STEP && steps < 60) {
-        s.race.step(this.input.read(players));
+        race.step(this.input.read(players));
         s.acc -= STEP;
         steps++;
       }
       this.handleEvents(s);
     }
+    if (s.mode !== 'attract') this.frameAudio(s);
     for (const v of s.views) v.update(s.paused ? 0 : dt);
     s.huds.forEach((h, i) => h.update(dt, this.ghostDelta(s, i)));
-    if (s.mode !== 'split' && coarse && s.race.time > 3) this.touchHint.classList.remove('show');
-    if (s.race.state === 'finished' && !s.resultsShown && s.race.time - s.race.finishedAt > 2.5) {
+    if (s.mode !== 'split' && coarse && race.time > 3) this.touchHint.classList.remove('show');
+    if (race.state === 'finished' && !s.resultsShown && race.time - race.finishedAt > 2.5) {
       s.resultsShown = true;
+      sound.setIntensity(0.3);
+      if (s.event) this.scoreEvent(s);
       this.show('results');
     }
+  }
+
+  private frameAudio(s: Session): void {
+    const race = s.race;
+    if (race.time < 0) {
+      const c = Math.ceil(-race.time);
+      if (c !== s.lastCount && c <= 3) sound.countdown(false);
+      s.lastCount = c;
+    }
+    race.humans.forEach((r, i) => {
+      const sh = r.ship;
+      sound.updateEngine(i, Math.hypot(sh.vx, sh.vy), s.paused ? 0 : sh.throttle, sh.scrape > 0 && !s.paused, !s.paused && !r.out);
+      if (sh.hit > 250) sound.hit(sh.hit);
+      if (sh.boost > s.boost[i]) sound.pad();
+      s.boost[i] = sh.boost;
+    });
+    const p1 = race.humans[0];
+    const final = !!p1 && !p1.finished && race.config.laps > 0 && p1.lap === race.config.laps;
+    if (final !== s.finalLap) { s.finalLap = final; sound.setIntensity(final ? 0.9 : 0.6); }
   }
 
   private ghostDelta(s: Session, i: number): number | null {
@@ -202,33 +263,62 @@ class Game {
   private handleEvents(s: Session): void {
     const race = s.race;
     for (const ev of race.events) {
-      if (ev.type === 'go') continue;
+      if (ev.type === 'go') { sound.countdown(true); continue; }
+      if (ev.type === 'out') {
+        for (const v of s.views) v.burst(ev.racer.ship.x, ev.racer.ship.y, ev.racer.spec.color);
+        sound.chime('out');
+        const hi = race.humans.indexOf(ev.racer);
+        for (const [i, h] of s.huds.entries()) h.flash(i === hi ? 'KNOCKED OUT' : `${ev.racer.spec.name.toUpperCase()} OUT`, i === hi ? '' : 'best');
+        continue;
+      }
       const hi = race.humans.indexOf(ev.racer);
       const hud = hi >= 0 ? s.huds[hi] : null;
       if (!hud) continue;
       if (ev.type === 'lap') {
-        const id = race.track.def.id;
-        const record = ev.time < bestLap(id);
+        const key = race.track.key;
+        const record = ev.time < bestLap(key);
         if (record && ev.ghost) {
-          saveBestLap(id, ev.time);
+          saveBestLap(key, ev.time);
           const g = ev.ghost;
-          void encodeGhost(g).then((code) => saveGhostCode(id, code));
-          if (s.mode === 'tt' && !this.imported.has(id) && this.settings.ghosts) {
+          void encodeGhost(g).then((code) => saveGhostCode(key, code));
+          if ((s.mode === 'tt' || s.event?.kind === 'tt') && !this.imported.has(key) && this.settings.ghosts) {
             s.ghost = g;
             s.ghostTimes = this.ghostTimes(g);
           }
         }
         const laps = race.config.laps;
+        sound.chime(record ? 'record' : ev.best ? 'best' : 'lap');
         if (record) hud.flash(`NEW RECORD  ${formatTime(ev.time)}`, 'record');
         else if (ev.best) hud.flash(`BEST LAP  ${formatTime(ev.time)}`, 'best');
         else if (laps > 0 && ev.racer.lap === laps) hud.flash('FINAL LAP');
         else hud.flash(formatTime(ev.time));
         if (laps > 0 && ev.racer.lap === laps && (record || ev.best)) setTimeout(() => hud.flash('FINAL LAP'), 1300);
       } else if (ev.type === 'finish') {
-        hud.flash(`FINISHED  ${ev.place}${['st', 'nd', 'rd'][ev.place - 1] ?? 'th'}`, 'best');
+        sound.chime('finish');
+        hud.flash(race.config.elimination ? 'LAST ONE FLYING' : `FINISHED  ${ordinal(ev.place)}`, 'best');
       }
     }
     race.events.length = 0;
+  }
+
+  private scoreEvent(s: Session): void {
+    const ev = s.event!;
+    const me = s.race.humans[0];
+    const earned = ev.kind === 'tt' ? ttStars(me.bestLap, s.targets!) : placeStars(me.place);
+    const before = this.totalStars();
+    const prev = this.progress[ev.id] ?? 0;
+    if (earned > prev) {
+      this.progress[ev.id] = earned;
+      saveProgress(this.progress);
+    }
+    const after = this.totalStars();
+    const unlocked = CHAPTERS.find((c) => c.need > before && c.need <= after)?.name ?? null;
+    this.earned = { stars: earned, improved: earned > prev, unlocked };
+    if (earned > 0) setTimeout(() => sound.chime('star'), 400);
+  }
+
+  private totalStars(): number {
+    return Object.values(this.progress).reduce((a, b) => a + b, 0);
   }
 
   private togglePause(): void {
@@ -242,7 +332,7 @@ class Game {
     const s = this.session;
     if (!s || s.paused || s.mode === 'attract' || s.race.state !== 'racing') return;
     const r = s.race.humans[slot];
-    if (r && !r.finished) s.race.respawn(r);
+    if (r && !r.finished && !r.out) s.race.respawn(r);
   }
 
   // ---------- menus ----------
@@ -255,7 +345,7 @@ class Game {
   private show(screen: string): void {
     this.menu.innerHTML = `<div class="panel ${screen}">${this.render(screen)}</div>`;
     this.menu.classList.add('show');
-    this.menu.dataset.screen = screen;
+    this.menu.scrollTop = 0;
     for (const c of this.menu.querySelectorAll<HTMLCanvasElement>('canvas[data-preview]')) drawPreview(c, c.dataset.preview!);
   }
 
@@ -267,48 +357,22 @@ class Game {
           <h1 class="logo">RACE<span>WING</span></h1>
           <p class="tag">gravity · walls · two buttons</p>
           <div class="stack">
-            <button class="primary" data-action="setup" data-mode="race">Race</button>
+            <button class="primary" data-action="go" data-to="campaign">Campaign <small>${this.totalStars()}/${MAX_STARS}★</small></button>
+            <button data-action="setup" data-mode="race">Quick Race</button>
             <button data-action="setup" data-mode="tt">Time Trial</button>
             <button data-action="setup" data-mode="split">Split-screen</button>
             <button data-action="go" data-to="settings">Settings</button>
             <button data-action="go" data-to="help">How to play</button>
           </div>`;
-      case 'setup': {
-        const m = this.setupMode;
-        const tiers: (Tier | 'mixed')[] = ['easy', 'medium', 'hard', 'insane', 'mixed'];
-        const maxBots = m === 'split' ? 4 : 5;
-        const toggle = (key: string, label: string, on: boolean) =>
-          `<label class="toggle"><input type="checkbox" data-set="${key}" ${on ? 'checked' : ''}><span>${label}</span></label>`;
-        const imported = this.imported.get(s.track);
-        return `
-          <h2>${MODE_TITLES[m]}</h2>
-          <div class="tracks">${TRACK_DEFS.map((d) => `
-            <button class="track ${d.id === s.track ? 'sel' : ''}" data-action="track" data-id="${d.id}" style="--c:${hex(d.color)}">
-              <canvas width="200" height="130" data-preview="${d.id}"></canvas>
-              <b>${d.name}</b><small>${d.blurb}</small>
-              <em>record ${formatTime(bestLap(d.id))}</em>
-            </button>`).join('')}
-          </div>
-          <div class="opts">
-            ${m === 'tt' ? '' : `
-            <div class="opt"><span>Laps</span><div class="stepper"><button data-action="laps" data-d="-1">−</button><b>${s.laps}</b><button data-action="laps" data-d="1">+</button></div></div>
-            <div class="opt"><span>Bots</span><div class="stepper"><button data-action="bots" data-d="-1">−</button><b>${Math.min(s.bots, maxBots)}</b><button data-action="bots" data-d="1">+</button></div></div>
-            <div class="opt wide"><span>Bot skill</span><div class="seg">${tiers.map((t) => `<button class="${s.tier === t ? 'sel' : ''}" data-action="tier" data-tier="${t}">${t === 'mixed' ? 'Mixed' : TIER_NAMES[t]}</button>`).join('')}</div></div>
-            ${toggle('rubberBand', 'Rubber-band bots', s.rubberBand)}
-            ${toggle('collisions', 'Ship collisions', s.collisions)}`}
-            ${toggle('ghosts', 'Show ghost', s.ghosts)}
-          </div>
-          ${m === 'tt' ? `
-          <div class="ghostbar">
-            <span>${imported ? `Racing imported ghost: <b>${esc(imported.name)}</b> ${formatTime(imported.time)}` : 'Racing your best-lap ghost'}</span>
-            <button data-action="share">Share my ghost</button>
-            <button data-action="go" data-to="import">Import ghost</button>
-            ${imported ? '<button data-action="unimport">Drop import</button>' : ''}
-          </div>` : ''}
-          ${m === 'split' ? '<p class="note">P1: <kbd>A</kbd> <kbd>D</kbd> or gamepad 1 · P2: <kbd>←</kbd> <kbd>→</kbd> or gamepad 2</p>' : ''}
-          <div class="row"><button data-action="go" data-to="main">Back</button><button class="primary" data-action="start">Start</button></div>`;
-      }
-      case 'settings':
+      case 'campaign':
+        return this.renderCampaign();
+      case 'brief':
+        return this.renderBrief();
+      case 'setup':
+        return this.renderSetup();
+      case 'settings': {
+        const slider = (key: string, label: string, v: number) =>
+          `<label class="field"><span>${label} <b>${Math.round(v * 100)}%</b></span><input type="range" min="0" max="1" step="0.05" data-set="${key}" value="${v}"></label>`;
         return `
           <h2>Settings</h2>
           <div class="opt wide"><span>Controls</span><div class="seg">
@@ -318,19 +382,24 @@ class Game {
           <p class="note">${s.scheme === 'thrust'
             ? 'Always thrusting. Hold one side to turn. Hold <b>both</b> to brake, then reverse.'
             : 'Hold one side to turn while coasting. Hold <b>both</b> to thrust.'}</p>
+          ${slider('music', 'Music', s.music)}
+          ${slider('sfx', 'Sound effects', s.sfx)}
+          <p class="note"><kbd>M</kbd> mutes everything.</p>
           <label class="field"><span>Player 1 name</span><input data-set="name" maxlength="16" value="${esc(s.name)}"></label>
           <label class="field"><span>Player 2 name</span><input data-set="name2" maxlength="16" value="${esc(s.name2)}"></label>
-          <div class="row"><button data-action="wipe">Clear records &amp; ghosts</button><button class="primary" data-action="go" data-to="main">Done</button></div>`;
+          <div class="row"><button data-action="wipe">Reset progress, records &amp; ghosts</button><button class="primary" data-action="go" data-to="main">Done</button></div>`;
+      }
       case 'help':
         return `
           <h2>How to play</h2>
           <ul class="help">
             <li><b>Two buttons.</b> Left half / right half of the screen, <kbd>A</kbd>/<kbd>D</kbd>, <kbd>←</kbd>/<kbd>→</kbd>, or gamepad bumpers / d-pad.</li>
             <li><b>Always thrust</b> (default): one button turns, both together brake and then reverse. Switch to <i>Classic</i> in Settings.</li>
-            <li><b>Scrape the walls.</b> Graze a wall at a shallow angle to charge speed and throw sparks. Hit it head-on and you bounce and lose speed.</li>
+            <li><b>Grind the walls.</b> Put your <i>engine flame</i> against a wall, tail in and nose angled slightly away, to boost and throw sparks. Nose-first contact just rubs off speed, and head-on hits bounce you.</li>
             <li><b>Green chevrons</b> are gravity currents that push you the way they point. <b>Purple wells</b> pull you in; <b>orange wells</b> push you away.</li>
             <li><b>Yellow arrows</b> are boost pads.</li>
-            <li><kbd>R</kbd> or gamepad Y resets your ship to the track. <kbd>Esc</kbd>/<kbd>P</kbd> or Start pauses.</li>
+            <li><b>Campaign:</b> earn up to 3★ per event (podium places, or bronze/silver/gold lap targets). Stars unlock the next series.</li>
+            <li><kbd>R</kbd> or gamepad Y resets your ship to the track. <kbd>Esc</kbd>/<kbd>P</kbd> or Start pauses. <kbd>M</kbd> mutes.</li>
           </ul>
           <div class="row"><button class="primary" data-action="go" data-to="main">Back</button></div>`;
       case 'pause':
@@ -346,50 +415,161 @@ class Game {
       case 'import':
         return `
           <h2>Import ghost</h2>
-          <p class="note">Paste a ghost code a friend shared. It'll be the ghost for that track's time trial.</p>
+          <p class="note">Paste a ghost code a friend shared. It becomes the ghost for that track's time trial.</p>
           <textarea id="ghost-in" rows="5" placeholder="RW1.…"></textarea>
           <p class="err" id="ghost-err"></p>
           <div class="row"><button data-action="setup" data-mode="tt">Cancel</button><button class="primary" data-action="import">Load</button></div>`;
-      case 'share':
+      case 'share': {
+        const key = getTrack(s.track).key;
         return `
           <h2>Share ghost</h2>
-          <p class="note">${esc(getTrack(s.track).def.name)}, ${formatTime(bestLap(s.track))}. Copy this code and send it to a friend.</p>
-          <textarea id="ghost-out" rows="6" readonly>${esc(ghostCode(s.track) ?? '')}</textarea>
+          <p class="note">${esc(getTrack(s.track).def.name)}, ${formatTime(bestLap(key))}. Copy this code and send it to a friend.</p>
+          <textarea id="ghost-out" rows="6" readonly>${esc(ghostCode(key) ?? '')}</textarea>
           <p class="err" id="copy-msg"></p>
-          <div class="row"><button data-action="back-setup">Back</button><button class="primary" data-action="copy">Copy</button></div>`;
+          <div class="row"><button data-action="back-share">Back</button><button class="primary" data-action="copy">Copy</button></div>`;
+      }
     }
     return '';
+  }
+
+  private renderCampaign(): string {
+    const total = this.totalStars();
+    return `
+      <h2>Campaign</h2>
+      <p class="tag">Pilot licence · ${total}/${MAX_STARS}★</p>
+      ${CHAPTERS.map((c) => {
+        const locked = total < c.need;
+        const got = c.events.reduce((a, e) => a + (this.progress[e.id] ?? 0), 0);
+        return `
+        <section class="chapter ${locked ? 'locked' : ''}">
+          <header><b>${c.name}</b><span>${locked ? `🔒 needs ${c.need}★` : `${got}/${c.events.length * 3}★`}</span></header>
+          <div class="events">${c.events.map((e, i) => `
+            <button class="event" data-action="brief" data-id="${e.id}" ${locked ? 'disabled' : ''} style="--c:${hex(getTrack(e.track).def.color)}">
+              <em>${i + 1}. ${KIND_LABEL[e.kind]}</em>
+              <b>${getTrack(e.track).def.name}</b>
+              ${stars(this.progress[e.id] ?? 0)}
+            </button>`).join('')}
+          </div>
+        </section>`;
+      }).join('')}
+      <div class="row"><button class="primary" data-action="go" data-to="main">Back</button></div>`;
+  }
+
+  private renderBrief(): string {
+    const found = findEvent(this.eventId)!;
+    const e = found.event;
+    const t = getTrack(e.track);
+    let goal: string;
+    if (e.kind === 'tt') {
+      const [b, sv, g] = ttTargets(e.track);
+      goal = `Best lap over 3 laps:<br><span class="medal b"></span>Bronze ${formatTime(b)} <span class="medal s"></span>Silver ${formatTime(sv)} <span class="medal g"></span>Gold ${formatTime(g)}`;
+    } else {
+      goal = `${e.kind === 'elim' ? `${e.field.length + 1} ships, one knocked out every lap.` : `${e.laps} laps, ${e.field.length + 1} ships.`}<br>1st ★★★ · 2nd ★★ · 3rd ★`;
+    }
+    const field = e.field.length ? `<p class="field-list">${e.field.map((o) => `${esc(o.name)} <small>${TIER_NAMES[o.tier]}</small>`).join(' · ')}</p>` : '';
+    return `
+      <h2>${found.chapter.name} · ${found.index + 1}</h2>
+      <div class="brief-body">
+        <canvas width="240" height="160" data-preview="${t.def.id}"></canvas>
+        <div>
+          <p class="kind" style="--c:${hex(t.def.color)}">${KIND_LABEL[e.kind]} · ${t.def.name}</p>
+          <p>${esc(e.brief)}</p>
+          ${e.rival ? `<blockquote><b>${esc(e.rival.name)}:</b> “${esc(e.rival.taunt)}”</blockquote>` : ''}
+          <p class="goal">${goal}</p>
+          ${field}
+          <p>Your best: ${stars(this.progress[e.id] ?? 0)}</p>
+        </div>
+      </div>
+      <div class="row"><button data-action="go" data-to="campaign">Back</button><button class="primary" data-action="start-event">Start</button></div>`;
+  }
+
+  private renderSetup(): string {
+    const s = this.settings;
+    const m = this.setupMode;
+    const tiers: (Tier | 'mixed')[] = ['easy', 'medium', 'hard', 'insane', 'mixed'];
+    const maxBots = m === 'split' ? 4 : 5;
+    const toggle = (key: string, label: string, on: boolean) =>
+      `<label class="toggle"><input type="checkbox" data-set="${key}" ${on ? 'checked' : ''}><span>${label}</span></label>`;
+    const imported = this.imported.get(getTrack(s.track).key);
+    return `
+      <h2>${MODE_TITLES[m]}</h2>
+      <div class="tracks">${TRACK_DEFS.map((d) => `
+        <button class="track ${d.id === s.track ? 'sel' : ''}" data-action="track" data-id="${d.id}" style="--c:${hex(d.color)}">
+          <canvas width="200" height="130" data-preview="${d.id}"></canvas>
+          <b>${d.name}</b><small>${d.blurb}</small>
+          <em>record ${formatTime(bestLap(getTrack(d.id).key))}</em>
+        </button>`).join('')}
+      </div>
+      <div class="opts">
+        ${m === 'tt' ? '' : `
+        <div class="opt"><span>Laps</span><div class="stepper"><button data-action="laps" data-d="-1">−</button><b>${s.laps}</b><button data-action="laps" data-d="1">+</button></div></div>
+        <div class="opt"><span>Bots</span><div class="stepper"><button data-action="bots" data-d="-1">−</button><b>${Math.min(s.bots, maxBots)}</b><button data-action="bots" data-d="1">+</button></div></div>
+        <div class="opt wide"><span>Bot skill</span><div class="seg">${tiers.map((t) => `<button class="${s.tier === t ? 'sel' : ''}" data-action="tier" data-tier="${t}">${t === 'mixed' ? 'Mixed' : TIER_NAMES[t]}</button>`).join('')}</div></div>
+        ${toggle('rubberBand', 'Rubber-band bots', s.rubberBand)}
+        ${toggle('collisions', 'Ship collisions', s.collisions)}`}
+        ${toggle('ghosts', 'Show ghost', s.ghosts)}
+      </div>
+      ${m === 'tt' ? `
+      <div class="ghostbar">
+        <span>${imported ? `Racing imported ghost: <b>${esc(imported.name)}</b> ${formatTime(imported.time)}` : 'Racing your best-lap ghost'}</span>
+        <button data-action="share">Share my ghost</button>
+        <button data-action="go" data-to="import">Import ghost</button>
+        ${imported ? '<button data-action="unimport">Drop import</button>' : ''}
+      </div>` : ''}
+      ${m === 'split' ? '<p class="note">P1: <kbd>A</kbd> <kbd>D</kbd> or gamepad 1 · P2: <kbd>←</kbd> <kbd>→</kbd> or gamepad 2</p>' : ''}
+      <div class="row"><button data-action="go" data-to="main">Back</button><button class="primary" data-action="start">Start</button></div>`;
   }
 
   private renderResults(): string {
     const s = this.session!;
     const race = s.race;
     const order = [...race.racers].sort((a, b) => a.place - b.place);
-    const rows = order.map((r) => `
+    const timeTrial = s.mode === 'tt' || s.event?.kind === 'tt';
+    const rows = (timeTrial ? race.humans : order).map((r) => `
       <tr class="${r.human ? 'me' : ''}">
         <td>${r.place}</td>
         <td><i style="background:${hex(r.spec.color)}"></i>${esc(r.spec.name)}${r.bot ? `<small>${TIER_NAMES[r.bot.tier]}</small>` : ''}</td>
-        <td>${r.finished ? formatTime(r.finishTime) : 'racing'}</td>
+        <td>${r.finished ? formatTime(r.finishTime) : r.out ? 'out' : 'racing'}</td>
         <td>${formatTime(r.bestLap)}</td>
       </tr>`).join('');
-    const hasGhost = !!ghostCode(race.track.def.id);
+    const key = race.track.key;
+    const hasGhost = !!ghostCode(key);
+    let head = '';
+    let actions = `<button class="primary" data-action="restart">Race again</button>`;
+    if (s.event && this.earned) {
+      const e = this.earned;
+      const found = findEvent(s.event.id)!;
+      const next = found.chapter.events[found.index + 1] ?? CHAPTERS[CHAPTERS.indexOf(found.chapter) + 1]?.events[0];
+      const nextOpen = next && this.totalStars() >= (CHAPTERS.find((c) => c.events.includes(next))?.need ?? 0);
+      head = `<div class="earned">${stars(e.stars)}<p>${e.stars === 0 ? (s.event.kind === 'tt' ? 'No medal this time. Retry?' : 'Off the podium. Retry?') : e.improved ? 'New best for this event!' : 'Stars already earned.'}</p>
+        ${e.unlocked ? `<p class="unlock">🔓 ${esc(e.unlocked)} unlocked!</p>` : ''}</div>`;
+      actions = `<button data-action="go" data-to="campaign">Campaign</button>
+        <button ${nextOpen ? '' : 'class="primary"'} data-action="restart">Retry</button>
+        ${nextOpen ? `<button class="primary" data-action="brief" data-id="${next.id}">Next event</button>` : ''}`;
+    } else {
+      actions = `<button data-action="quit">Menu</button>${hasGhost ? '<button data-action="share">Share ghost</button>' : ''}${actions}`;
+    }
+    const sub = timeTrial ? `${race.config.laps || ''} laps · best lap ${formatTime(race.humans[0]?.bestLap ?? Infinity)}` : race.config.elimination ? 'Elimination' : `${race.config.laps} laps`;
     return `
       <h2>Results</h2>
-      <p class="tag">${esc(race.track.def.name)} · ${race.config.laps} laps</p>
+      <p class="tag">${esc(race.track.def.name)} · ${sub}</p>
+      ${head}
       <table class="results"><thead><tr><th>#</th><th>Racer</th><th>Time</th><th>Best lap</th></tr></thead><tbody>${rows}</tbody></table>
-      <div class="row">
-        <button data-action="quit">Menu</button>
-        ${hasGhost ? '<button data-action="share">Share ghost</button>' : ''}
-        <button class="primary" data-action="restart">Race again</button>
-      </div>`;
+      <div class="row">${actions}</div>`;
   }
 
   private onChange(e: Event): void {
     const el = e.target as HTMLInputElement;
-    const key = el.dataset.set as keyof typeof this.settings | undefined;
+    const key = el.dataset.set;
     if (!key) return;
     const st = this.settings as unknown as Record<string, unknown>;
-    st[key] = el.type === 'checkbox' ? el.checked : el.value.trim() || st[key];
+    if (el.type === 'checkbox') st[key] = el.checked;
+    else if (el.type === 'range') {
+      st[key] = Number(el.value);
+      const label = el.parentElement?.querySelector('b');
+      if (label) label.textContent = Math.round(Number(el.value) * 100) + '%';
+      sound.setVolumes(this.settings.music, this.settings.sfx);
+    } else if (e.type === 'change') st[key] = el.value.trim() || st[key];
     saveSettings(this.settings);
   }
 
@@ -401,7 +581,21 @@ class Game {
     switch (d.action) {
       case 'go': this.show(d.to!); break;
       case 'setup': this.setupMode = d.mode as Mode; this.show('setup'); break;
-      case 'back-setup':
+      case 'brief': {
+        this.eventId = d.id!;
+        const ev = findEvent(this.eventId)!.event;
+        if (this.session?.mode !== 'attract' || this.session.race.track.def.id !== ev.track) {
+          s.track = ev.track;
+          this.startAttract();
+        }
+        this.show('brief');
+        break;
+      }
+      case 'start-event':
+        if (coarse) document.documentElement.requestFullscreen?.().catch(() => {});
+        void this.start('campaign', findEvent(this.eventId)!.event);
+        break;
+      case 'back-share':
         if (this.session && this.session.mode !== 'attract') this.show('results');
         else this.show('setup');
         break;
@@ -420,17 +614,28 @@ class Game {
         void this.start(this.setupMode);
         break;
       case 'resume': this.togglePause(); break;
-      case 'restart': void this.start(this.session?.mode ?? this.setupMode); break;
-      case 'quit': this.startAttract(); this.show('main'); this.pauseBtn.classList.remove('show'); this.touchHint.classList.remove('show'); break;
+      case 'restart': {
+        const cur = this.session;
+        void this.start(cur?.mode ?? this.setupMode, cur?.event ?? null);
+        break;
+      }
+      case 'quit':
+        this.startAttract();
+        this.show('main');
+        this.pauseBtn.classList.remove('show');
+        this.touchHint.classList.remove('show');
+        break;
       case 'wipe':
-        if (confirm('Delete all saved records and ghosts?')) {
+        if (confirm('Delete campaign progress, records and ghosts?')) {
           clearAll();
           this.settings = loadSettings();
+          this.progress = loadProgress();
           this.show('settings');
         }
         break;
       case 'share':
-        if (!ghostCode(s.track)) { alert('Set a lap time on this track first.'); break; }
+        if (this.session && this.session.mode !== 'attract') s.track = this.session.race.track.def.id;
+        if (!ghostCode(getTrack(s.track).key)) { alert('Set a lap time on this track first.'); break; }
         this.show('share');
         break;
       case 'copy': {
@@ -444,18 +649,19 @@ class Game {
         const code = (document.getElementById('ghost-in') as HTMLTextAreaElement).value;
         const err = document.getElementById('ghost-err')!;
         decodeGhost(code).then((g) => {
-          if (!TRACK_DEFS.some((t) => t.id === g.trackId)) throw new Error('That ghost is for a track this version doesn\'t have.');
+          const id = g.trackId.split('@')[0];
+          if (!TRACK_DEFS.some((t) => t.id === id)) throw new Error('That ghost is for a track this version doesn\'t have.');
+          if (getTrack(id).key !== g.trackId) throw new Error('That ghost was recorded on an older layout of this track.');
           this.imported.set(g.trackId, g);
-          s.track = g.trackId;
+          s.track = id;
           saveSettings(s);
           this.setupMode = 'tt';
           this.startAttract();
           this.show('setup');
-        }, (x: Error) => { err.textContent = x.message || 'Could not read that code.'; })
-          .catch((x: Error) => { err.textContent = x.message; });
+        }).catch((x: Error) => { err.textContent = x.message || 'Could not read that code.'; });
         break;
       }
-      case 'unimport': this.imported.delete(s.track); this.show('setup'); break;
+      case 'unimport': this.imported.delete(getTrack(s.track).key); this.show('setup'); break;
     }
   }
 }

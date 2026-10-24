@@ -43,6 +43,9 @@ html, body {
 .hud-time { font: 600 26px var(--display); letter-spacing: 1px; font-variant-numeric: tabular-nums; }
 .hud-best { font: 500 16px var(--ui); color: var(--dim); }
 .hud-delta { font: 700 20px var(--display); }
+.hud-info { font: 600 15px var(--ui); color: var(--dim); margin-top: 2px; }
+.medal { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin: 0 4px 0 10px; vertical-align: 0; }
+.medal.b { background: #d08a4a; } .medal.s { background: #cfd8e3; } .medal.g { background: #ffd23d; box-shadow: 0 0 8px #ffd23d; }
 .hud-delta.fast { color: #3dff9a; text-shadow: 0 0 10px #3dff9a; }
 .hud-delta.slow { color: #ff5a6a; }
 .hud-speed {
@@ -178,3 +181,31 @@ kbd { font: 600 13px var(--display); border: 1px solid var(--line); border-radiu
   .track canvas { width: 110px; }
   .track small { flex-basis: 100%; }
 }
+
+/* ---------- campaign ---------- */
+.stack button small { font-size: 15px; opacity: 0.75; margin-left: 6px; }
+.stars { color: var(--yellow); letter-spacing: 2px; text-shadow: 0 0 8px rgba(255, 225, 77, 0.6); }
+.stars i { font-style: normal; color: rgba(255, 255, 255, 0.18); text-shadow: none; }
+.chapter { margin: 14px 0; }
+.chapter header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+.chapter header b { font: 600 17px var(--display); letter-spacing: 2px; color: var(--pink); text-transform: uppercase; }
+.chapter header span { color: var(--dim); }
+.chapter.locked { opacity: 0.45; }
+.events { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; }
+.event { display: flex; flex-direction: column; gap: 3px; text-align: left; padding: 9px 11px; border-color: color-mix(in srgb, var(--c) 40%, transparent); }
+.event:disabled { cursor: not-allowed; }
+.event em { font: 500 13px var(--ui); font-style: normal; color: var(--dim); text-transform: uppercase; letter-spacing: 1px; }
+.event b { font: 600 14px var(--display); color: var(--c); }
+.brief-body { display: flex; gap: 18px; flex-wrap: wrap; }
+.brief-body canvas { width: 240px; max-width: 100%; height: auto; background: rgba(0, 0, 0, 0.35); border-radius: 10px; }
+.brief-body > div { flex: 1; min-width: 220px; font-size: 17px; }
+.brief-body p { margin: 0 0 10px; }
+.brief-body .kind { font: 600 15px var(--display); color: var(--c); letter-spacing: 2px; text-transform: uppercase; }
+.brief-body blockquote { margin: 0 0 10px; padding: 8px 12px; border-left: 3px solid var(--pink); background: rgba(255, 61, 242, 0.07); border-radius: 0 8px 8px 0; }
+.brief-body .goal { color: var(--text); }
+.field-list small, .brief-body small { color: var(--dim); font-size: 13px; text-transform: uppercase; }
+.earned { text-align: center; margin: 4px 0 14px; }
+.earned .stars { font-size: 42px; }
+.earned p { margin: 4px 0; color: var(--dim); }
+.earned .unlock { color: #3dff9a; font: 600 17px var(--display); letter-spacing: 1px; }
+input[type='range'] { padding: 0; accent-color: var(--cyan); }

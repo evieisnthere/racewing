@@ -1,6 +1,8 @@
 # Racewing
 
-A neon two-button racer inspired by **Data Wing**: gravity currents, attractor/repulsor wells, boost pads, and wall-scrape boosting. Race AI bots at four skill levels, chase your best-lap ghost, share ghost codes, or race a friend split-screen.
+A neon two-button racer inspired by **Data Wing**: gravity currents, attractor/repulsor wells, boost pads, and wall grinding. Play a star-gated campaign (races, time-trial medals, elimination), race AI bots at four skill levels, chase your best-lap ghost, share ghost codes, or race a friend split-screen. Ambient electronic music and all sound effects are synthesised live with WebAudio.
+
+Play it: https://evieisnthere.github.io/racewing/
 
 Built with **Vite + TypeScript + PixiJS (WebGL)** and deployed to **GitHub Pages**.
 
@@ -13,17 +15,21 @@ Built with **Vite + TypeScript + PixiJS (WebGL)** and deployed to **GitHub Pages
 | Gamepad | LB / LT / d-pad / stick | RB / RT / d-pad / stick | brake → reverse |
 | Split-screen | P1 `A` `D`, P2 `←` `→` (or gamepads 1 & 2) | | |
 
-`R` (P1) / `Enter` (P2) / gamepad Y resets your ship onto the track. `Esc`, `P` or Start pauses.
+`M` mutes. `R` (P1) / `Enter` (P2) / gamepad Y resets your ship onto the track. `Esc`, `P` or Start pauses.
 
 **Always thrust** (default): you're always accelerating, one button turns, both together brake and then reverse.
 **Classic** (Settings): one button turns while coasting, both together thrust.
 
 ## Mechanics
 
-- **Wall scraping**: graze a wall at a shallow angle (under ~25°) to gain speed and throw sparks. Head-on hits bounce you and cost speed.
+- **Wall grinding**: put your engine flame against a wall (tail touching, nose angled slightly away) to boost and throw sparks. Sliding along nose-first just rubs off speed, and head-on hits bounce you.
 - **Gravity currents** (green chevrons) push you the way they point: downhill, uphill, or sideways.
 - **Wells**: purple pulls you in, orange pushes you away.
 - **Boost pads** (yellow arrows).
+
+## Campaign
+
+Four series: Rookie, Pro, Elite and Championship, 18 events in all. Each event awards up to 3★: podium places in races and eliminations, and bronze/silver/gold lap targets in time trials (the targets are the best laps of Easy, Hard and Insane bots). Stars unlock the next series.
 
 ## AI
 

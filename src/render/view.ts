@@ -251,6 +251,11 @@ export class View {
     race.racers.forEach((r, i) => {
       const s = r.ship;
       const sp = this.ships[i];
+      if (r.out) {
+        sp.visible = false;
+        this.trails[i].g.clear();
+        return;
+      }
       sp.position.set(s.x, s.y);
       sp.rotation = s.angle;
       sp.flame.visible = s.throttle > 0;
@@ -320,10 +325,10 @@ export class View {
     // Camera: lead the ship, zoom out with speed.
     const s = this.follow.ship;
     const speed = Math.hypot(s.vx, s.vy);
-    const base = Math.min(this.w, this.h) / 720;
-    const targetZoom = base * clamp(1.25 - speed / 1700, 0.62, 1.25);
+    const base = Math.min(this.w, this.h) / 640;
+    const targetZoom = base * clamp(1.2 - speed / 1300, 0.68, 1.2);
     this.zoom += (targetZoom - this.zoom) * (1 - Math.exp(-2.2 * dt));
-    const tx = s.x + s.vx * 0.3, ty = s.y + s.vy * 0.3;
+    const tx = s.x + s.vx * 0.35, ty = s.y + s.vy * 0.35;
     const k = 1 - Math.exp(-7 * dt);
     this.camX += (tx - this.camX) * k;
     this.camY += (ty - this.camY) * k;
@@ -338,6 +343,14 @@ export class View {
       md.circle(r.ship.x * this.miniScale + this.miniOx, r.ship.y * this.miniScale + this.miniOy, big ? 5 : 3.2)
         .fill({ color: r.spec.color });
       if (big) md.circle(r.ship.x * this.miniScale + this.miniOx, r.ship.y * this.miniScale + this.miniOy, 8).stroke({ width: 1.5, color: 0xffffff, alpha: 0.8 });
+    }
+  }
+
+  /** Explosion of sparks, e.g. when a ship is knocked out. */
+  burst(x: number, y: number, color: number): void {
+    for (let k = 0; k < 60; k++) {
+      const a = this.rand() * Math.PI * 2, v = 60 + this.rand() * 520;
+      this.spark(x, y, Math.cos(a) * v, Math.sin(a) * v, k % 3 ? color : 0xffffff, 0.5 + this.rand() * 0.6);
     }
   }
 
