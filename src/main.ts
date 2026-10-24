@@ -11,7 +11,8 @@ import { drawHull2D, hullById, PLAYER_COLORS, STARTER_HULLS } from './core/ships
 import { decodeGhost, encodeGhost, ghostPose, GHOST_HZ, type Ghost } from './core/ghost';
 import { formatTime } from './core/math';
 import { Race, STEP, type Racer, type RacerSpec } from './core/race';
-import { getTrack, TRACK_DEFS } from './core/tracks';
+import { dailySeed, DEFAULT_PARAMS, generate, genCode, normalize, parseCode, type GenParams } from './core/generator';
+import { getTrack, isGenerated, registerTrack, TRACK_DEFS } from './core/tracks';
 import { Input } from './input';
 import { View } from './render/view';
 import {
@@ -86,6 +87,8 @@ class Game {
   private earned: { stars: number; improved: boolean; unlocked: string[] } | null = null;
   private dialogue: { lines: Line[]; i: number; then: () => void } | null = null;
   private hangarBack = 'main';
+  /** Generator sliders moved but not yet generated. */
+  private pendingGen: GenParams | null = null;
 
   async init(): Promise<void> {
     await this.app.init({
@@ -487,6 +490,7 @@ class Game {
             <button data-action="setup" data-mode="race">Quick Race</button>
             <button data-action="setup" data-mode="tt">Time Trial</button>
             <button data-action="setup" data-mode="split">Split-screen</button>
+            <button data-action="go" data-to="gen">Track Generator</button>
             <button data-action="go" data-to="hangar">Hangar</button>
             <button data-action="go" data-to="settings">Settings</button>
             <button data-action="go" data-to="help">How to play</button>
@@ -503,6 +507,8 @@ class Game {
         return renderHangar(s.hull, s.color, [...STARTER_HULLS, ...unlockedHulls(this.progress)]);
       case 'setup':
         return this.renderSetup();
+      case 'gen':
+        return this.renderGen();
       case 'settings': {
         const slider = (key: string, label: string, v: number) =>
           `<label class="field"><span>${label} <b>${Math.round(v * 100)}%</b></span><input type="range" min="0" max="1" step="0.05" data-set="${key}" value="${v}"></label>`;
@@ -569,6 +575,63 @@ class Game {
     return '';
   }
 
+  private genState(): { seed: number; params: GenParams } {
+    const cur = isGenerated(this.settings.track) ? parseCode(this.settings.track.slice(4)) : null;
+    return cur ?? { seed: 1, params: { ...DEFAULT_PARAMS } };
+  }
+
+  private renderGen(): string {
+    const { seed, params } = this.genState();
+    const code = genCode(seed, params);
+    const t = isGenerated(this.settings.track) ? getTrack(this.settings.track) : null;
+    const slider = (key: keyof GenParams, label: string, min: number) =>
+      `<label class="field gen-slider"><span>${label} <b>${params[key]}</b></span><input type="range" min="${min}" max="5" step="1" data-gen="${key}" value="${params[key]}"></label>`;
+    const daily = seed === dailySeed() && code === genCode(dailySeed(), { ...DEFAULT_PARAMS });
+    return `
+      <h2>Track Generator</h2>
+      <div class="gen-body">
+        <div class="gen-left">
+          ${t ? `<canvas width="360" height="240" data-preview="${t.def.id}"></canvas>
+          <p class="gen-name" style="--c:${hex(t.def.color)}">${esc(t.def.name)}${daily ? ' · <span class="daily">Daily</span>' : ''}</p>
+          <p class="note">length ${(t.length / 1000).toFixed(1)}k · record ${formatTime(bestLap(t.key))}</p>` : '<p class="note">Pick settings and press Generate.</p>'}
+          <div class="gen-code"><code>${code}</code><button data-action="gen-copy">Copy code</button></div>
+          <p class="err" id="gen-msg"></p>
+        </div>
+        <div class="gen-right">
+          ${slider('length', 'Length', 1)}
+          ${slider('twist', 'Twistiness', 1)}
+          ${slider('width', 'Width', 1)}
+          ${slider('features', 'Fields &amp; pads', 0)}
+          ${slider('gimmicks', 'Gimmicks', 0)}
+          <label class="field"><span>Seed</span><div class="gen-seed"><input id="gen-seed" inputmode="numeric" value="${seed}"><button data-action="gen-random" aria-label="Random seed">🎲</button></div></label>
+          <label class="field"><span>Load a code</span><div class="gen-seed"><input id="gen-in" placeholder="G1k3x.33332"><button data-action="gen-load">Load</button></div></label>
+        </div>
+      </div>
+      <div class="row">
+        <button data-action="go" data-to="main">Back</button>
+        <button data-action="gen-daily">Daily track</button>
+        <button data-action="gen-make">Generate</button>
+        ${t ? '<button data-action="gen-play" data-mode="tt">Time Trial</button><button class="primary" data-action="gen-play" data-mode="race">Race</button>' : ''}
+      </div>`;
+  }
+
+  /** Generate (synchronously; up to ~2 s) and select a track, showing a busy state first. */
+  private makeTrack(seed: number, params: GenParams): void {
+    const msg = document.getElementById('gen-msg');
+    if (msg) msg.textContent = 'Generating…';
+    this.menu.classList.add('busy');
+    setTimeout(() => {
+      const def = generate(seed >>> 0, normalize(params));
+      registerTrack(def);
+      this.pendingGen = null;
+      this.settings.track = def.id;
+      saveSettings(this.settings);
+      this.menu.classList.remove('busy');
+      this.startAttract();
+      this.show('gen');
+    }, 30);
+  }
+
   private renderSetup(): string {
     const s = this.settings;
     const m = this.setupMode;
@@ -579,7 +642,7 @@ class Game {
     const imported = this.imported.get(getTrack(s.track).key);
     return `
       <h2>${MODE_TITLES[m]}</h2>
-      <div class="tracks">${TRACK_DEFS.map((d) => `
+      <div class="tracks">${[...TRACK_DEFS, ...(isGenerated(s.track) ? [getTrack(s.track).def] : [])].map((d) => `
         <button class="track ${d.id === s.track ? 'sel' : ''}" data-action="track" data-id="${d.id}" style="--c:${hex(d.color)}">
           <canvas width="200" height="130" data-preview="${d.id}"></canvas>
           <b>${d.name}</b><small>${d.blurb}</small>
@@ -646,6 +709,13 @@ class Game {
 
   private onChange(e: Event): void {
     const el = e.target as HTMLInputElement;
+    if (el.dataset.gen) {
+      const p = { ...(this.pendingGen ?? this.genState().params), [el.dataset.gen]: Number(el.value) };
+      this.pendingGen = p;
+      const label = el.parentElement?.querySelector('b');
+      if (label) label.textContent = el.value;
+      return;
+    }
     const key = el.dataset.set;
     if (!key) return;
     const st = this.settings as unknown as Record<string, unknown>;
@@ -716,6 +786,36 @@ class Game {
       case 'back-share':
         if (this.session && this.session.mode !== 'attract') this.show('results');
         else this.show('setup');
+        break;
+      case 'gen-make': {
+        const g = this.genState();
+        const seedIn = Number((document.getElementById('gen-seed') as HTMLInputElement).value);
+        this.makeTrack(Number.isFinite(seedIn) ? seedIn : g.seed, this.pendingGen ?? g.params);
+        break;
+      }
+      case 'gen-random':
+        this.makeTrack(Math.floor(Math.random() * 2 ** 31), this.pendingGen ?? this.genState().params);
+        break;
+      case 'gen-daily':
+        this.makeTrack(dailySeed(), { ...DEFAULT_PARAMS });
+        break;
+      case 'gen-load': {
+        const code = (document.getElementById('gen-in') as HTMLInputElement).value;
+        const g = parseCode(code);
+        if (!g) { document.getElementById('gen-msg')!.textContent = 'That isn\'t a valid track code.'; break; }
+        this.makeTrack(g.seed, g.params);
+        break;
+      }
+      case 'gen-copy': {
+        const { seed, params } = this.genState();
+        const code = genCode(seed, params);
+        const msg = document.getElementById('gen-msg')!;
+        navigator.clipboard?.writeText(code).then(() => { msg.textContent = 'Copied!'; }, () => { msg.textContent = code; });
+        break;
+      }
+      case 'gen-play':
+        this.setupMode = d.mode as Mode;
+        this.show('setup');
         break;
       case 'track':
         s.track = d.id!;

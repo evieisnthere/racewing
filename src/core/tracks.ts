@@ -1,3 +1,4 @@
+import { generate, parseCode } from './generator';
 import { Track, type TrackDef } from './track';
 
 export const TRACK_DEFS: TrackDef[] = [
@@ -174,9 +175,19 @@ const cache = new Map<string, Track>();
 export function getTrack(id: string): Track {
   let t = cache.get(id);
   if (!t) {
-    const def = TRACK_DEFS.find((d) => d.id === id) ?? TRACK_DEFS[0];
+    const gen = id.startsWith('gen:') ? parseCode(id.slice(4)) : null;
+    const def = gen ? generate(gen.seed, gen.params) : TRACK_DEFS.find((d) => d.id === id) ?? TRACK_DEFS[0];
     t = new Track(def);
     cache.set(def.id, t);
   }
   return t;
 }
+
+/** Cache a track built elsewhere (e.g. just generated) so getTrack doesn't rebuild it. */
+export function registerTrack(def: TrackDef): Track {
+  const t = new Track(def);
+  cache.set(def.id, t);
+  return t;
+}
+
+export const isGenerated = (id: string): boolean => id.startsWith('gen:');

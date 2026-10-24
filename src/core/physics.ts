@@ -216,7 +216,7 @@ export function stepShip(s: Ship, intent: Intent, course: Course, dt: number): v
       if (!inRegion(r, s.x, s.y)) continue;
       const along = s.vx * r.dx + s.vy * r.dy;
       if (along > 120) {
-        s.air = s.airMax = clamp(0.3 + along / 600, 0.45, 1.2);
+        s.air = s.airMax = clamp(0.4 + along / 550, 0.6, 1.3);
         s.angVel = 0;
       }
       break;

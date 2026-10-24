@@ -336,3 +336,18 @@ input[type='range'] { padding: 0; accent-color: var(--cyan); }
   .track small { display: none; }
   .hud-count { font-size: 80px; }
 }
+
+/* ---------- generator ---------- */
+.gen-body { display: flex; gap: 20px; flex-wrap: wrap; }
+.gen-left { flex: 1 1 300px; }
+.gen-left canvas { width: 100%; max-width: 360px; height: auto; background: rgba(0, 0, 0, 0.35); border-radius: 10px; }
+.gen-right { flex: 1 1 240px; }
+.gen-name { font: 600 18px var(--display); color: var(--c); margin: 8px 0 2px; }
+.gen-name .daily { color: var(--yellow); }
+.gen-code { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.gen-code code { font: 600 16px ui-monospace, monospace; padding: 6px 10px; border-radius: 8px; background: rgba(0, 0, 0, 0.4); border: 1px solid var(--line); user-select: all; -webkit-user-select: all; }
+.gen-slider { margin: 6px 0; }
+.gen-seed { display: flex; gap: 6px; }
+.gen-seed button { flex: none; padding: 6px 12px; }
+#menu.busy { cursor: progress; }
+#menu.busy .panel { opacity: 0.6; pointer-events: none; }

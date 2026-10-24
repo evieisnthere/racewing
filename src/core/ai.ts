@@ -99,8 +99,13 @@ export class Bot {
       return this.set(true, true);
     }
 
+    // Never brake on the run-up to a jump: speed is what clears the pit.
+    const jumpAhead = track.pitSpans.some(([a, b]) => {
+      const d = track.wrap(a - s.idx);
+      return d < 45 || track.inRange(s.idx, a, b);
+    });
     // Brake if any upcoming corner within stopping distance needs less speed.
-    if (fwd > 200 && Math.abs(err) < 1.2) {
+    if (fwd > 200 && Math.abs(err) < 1.2 && !jumpAhead) {
       const reach = (fwd * fwd) / (2 * PHYS.brake) + fwd * 0.15 + 60;
       const steps = Math.min(track.n >> 1, Math.ceil(reach / SPACING));
       for (let j = 2; j <= steps; j += 2) {
