@@ -33,6 +33,13 @@ for (const def of TRACK_DEFS) {
   const lx = new Float64Array(t.n), ly = new Float64Array(t.n);
   for (let i = 0; i < t.n; i++) { lx[i] = t.cx[i] + t.nx[i] * t.lineOff[i]; ly[i] = t.cy[i] + t.ny[i] * t.lineOff[i]; }
   parts.push(`<polygon points="${poly(lx, ly)}" fill="none" stroke="#fff" stroke-opacity="0.35" stroke-width="5" stroke-dasharray="30 30"/>`);
+  const pts = (poly: number[]) => poly.map((v) => v.toFixed(0)).join(' ');
+  const SC: Record<string, string> = { ice: '#9fe8ff', mud: '#8a5a2b', turbo: '#ffe14d', flip: '#ff3df2' };
+  for (const sf of t.surfaces) parts.push(`<polygon points="${pts(sf.poly)}" fill="${SC[sf.kind]}" fill-opacity="0.5"/>`);
+  for (const r of t.ramps) parts.push(`<polygon points="${pts(r.poly)}" fill="#fff" fill-opacity="0.7"/>`);
+  for (const pit of t.pits) parts.push(`<polygon points="${pts(pit.poly)}" fill="#ff3355" fill-opacity="0.8"/>`);
+  for (const pt of t.portals) parts.push(`<circle cx="${pt.ax}" cy="${pt.ay}" r="${pt.r}" fill="#5ad1ff"/><circle cx="${pt.bx}" cy="${pt.by}" r="${pt.r}" fill="none" stroke="#5ad1ff" stroke-width="12"/><line x1="${pt.ax}" y1="${pt.ay}" x2="${pt.bx}" y2="${pt.by}" stroke="#5ad1ff" stroke-dasharray="40 30" stroke-width="6"/>`);
+  for (const h of t.hazards) parts.push(`<circle cx="${h.cx}" cy="${h.cy}" r="${h.len / 2}" fill="none" stroke="#ff3355" stroke-width="10" stroke-dasharray="20 20"/>`);
   for (const p of t.pads) {
     const i = p.i0;
     parts.push(`<circle cx="${t.cx[i] + t.nx[i] * p.lat}" cy="${t.cy[i] + t.ny[i] * p.lat}" r="40" fill="#ffe14d"/>`);

@@ -135,6 +135,38 @@ export const TRACK_DEFS: TrackDef[] = [
     ],
     pads: [{ at: 0.05, offset: 0 }, { at: 0.12, offset: 0.5 }, { at: 0.55, offset: 0 }],
   },
+  {
+    id: 'portal',
+    name: 'Portal Loop',
+    blurb: 'An ice-slick straight, a control-flipping chicane, and a portal that skips the hairpin if you can thread it.',
+    color: 0x5ad1ff,
+    accent: 0xff3df2,
+    width: 230,
+    scale: 100,
+    points: [
+      [0, 0], [10, 0], [20, 0], [26, 2], [30, 7], [31, 14], [30, 22], [27, 27], [22, 28], [18, 25], [17, 19],
+      [17, 12], [14, 9.5], [8, 11], [2, 13], [-4, 12.5], [-9, 9], [-10, 4], [-6, 0.5],
+    ],
+    surfaces: [{ from: 0.04, to: 0.14, kind: 'ice' }, { from: 0.82, to: 0.9, kind: 'flip' }],
+    portals: [{ from: 0.3, to: 0.47, offset: 0.55, radius: 40 }],
+    pads: [{ at: 0.6, offset: 0 }],
+  },
+  {
+    id: 'jumpyard',
+    name: 'Jump Yard',
+    blurb: 'Hit the ramps at speed to clear the pits, time the spinning bars, and slog through the mud.',
+    color: 0xff7a3d,
+    accent: 0xffffff,
+    width: 230,
+    scale: 100,
+    points: [
+      [0, 0], [12, 0], [24, 0], [30, 3], [32, 9], [30, 15], [24, 17], [18, 15], [12, 17], [6, 20], [0, 20],
+      [-6, 18], [-9, 12], [-8, 6], [-5, 2],
+    ],
+    jumps: [{ at: 0.08, gap: 180 }, { at: 0.62, gap: 160 }],
+    hazards: [{ at: 0.33, kind: 'spin', speed: 1.3 }, { at: 0.8, kind: 'slide', speed: 0.3 }],
+    surfaces: [{ from: 0.45, to: 0.52, kind: 'mud', side: 'left' }, { from: 0.9, to: 0.95, kind: 'turbo' }],
+  },
 ];
 
 const cache = new Map<string, Track>();

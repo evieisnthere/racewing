@@ -1,10 +1,19 @@
+import { Course, region, type Hazard, type RespawnInfo, type SurfaceKind } from './course';
 import { clamp } from './math';
+
+export type { Segment, Well } from './course';
 
 /** Directional gravity over a stretch of track. Fractions are of a lap; angle is degrees relative to the track tangent (0 = forward, 90 = toward the right wall). */
 export interface GravityZoneDef { from: number; to: number; angle: number; strength: number }
 /** Point attractor (strength > 0) or repulsor (< 0). `offset` is across the track in half-widths: -1 left wall, +1 right wall, beyond 1 is off-track. */
 export interface WellDef { at: number; offset: number; radius: number; strength: number; /** Absolute position, overriding at/offset. */ x?: number; y?: number }
 export interface PadDef { at: number; offset: number; length?: number; width?: number }
+/** One-way portal: entering near `from` (fraction, offset in half-widths) exits at `to`. */
+export interface PortalDef { from: number; to: number; offset?: number; toOffset?: number; radius?: number }
+export interface HazardDef { at: number; offset?: number; kind: 'spin' | 'slide'; len?: number; speed?: number; arms?: number; phase?: number }
+export interface SurfaceDef { from: number; to: number; kind: SurfaceKind; side?: 'left' | 'right' | 'full' }
+/** Ramp at `at` then a full-width pit `gap` units long. */
+export interface JumpDef { at: number; gap?: number }
 
 export interface TrackDef {
   id: string;
@@ -21,15 +30,16 @@ export interface TrackDef {
   gravity?: GravityZoneDef[];
   wells?: WellDef[];
   pads?: PadDef[];
+  portals?: PortalDef[];
+  hazards?: HazardDef[];
+  surfaces?: SurfaceDef[];
+  jumps?: JumpDef[];
 }
 
-export interface Segment { ax: number; ay: number; bx: number; by: number; nx: number; ny: number }
 export interface Zone { i0: number; i1: number; angle: number; strength: number }
-export interface Well { x: number; y: number; radius: number; strength: number }
 export interface Pad { i0: number; i1: number; lat: number; halfWidth: number }
 
 export const SPACING = 16;
-const CELL = 96;
 
 function hash(s: string): number {
   let h = 2166136261;
@@ -67,7 +77,7 @@ function curvature(xs: Float64Array, ys: Float64Array, k: number): Float64Array 
   return out;
 }
 
-export class Track {
+export class Track extends Course {
   readonly def: TrackDef;
   /** id plus a hash of the definition, so records and ghosts from an older layout are not reused. */
   readonly key: string;
@@ -85,17 +95,13 @@ export class Track {
   /** Racing-line lateral offset, and its signed curvature. */
   readonly lineOff: Float64Array;
   readonly lineCurv: Float64Array;
-  readonly segments: Segment[] = [];
   readonly zones: Zone[] = [];
-  readonly wells: Well[] = [];
   readonly pads: Pad[] = [];
-  readonly bounds = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
-  private grid = new Map<number, number[]>();
-  private stamp: Uint32Array;
-  private stampId = 0;
-  private queryOut: number[] = [];
+  /** Sample ranges covered by pits (respawn goes to just before them). */
+  readonly pitSpans: [number, number][] = [];
 
   constructor(def: TrackDef) {
+    super();
     this.def = def;
     this.key = def.id + '@' + hash(JSON.stringify(def)).toString(36);
     const raw: number[][] = [];
@@ -172,7 +178,7 @@ export class Track {
       ly[i] = this.cy[i] + this.ny[i] * this.lineOff[i];
     }
     this.lineCurv = curvature(lx, ly, 3);
-    this.stamp = new Uint32Array(this.segments.length);
+    this.finalizeGrid();
 
     const idx = (f: number) => ((Math.round(f * n) % n) + n) % n;
     for (const z of def.gravity ?? []) {
@@ -192,6 +198,61 @@ export class Track {
       const len = Math.max(1, Math.round((p.length ?? 128) / SPACING));
       this.pads.push({ i0, i1: (i0 + len) % n, lat: p.offset * this.hw[i0], halfWidth: (p.width ?? 56) / 2 });
     }
+    this.buildGimmicks(idx);
+  }
+
+  /** Polygon covering samples i0..i1, between lateral fractions f0..f1 (-1 left wall, +1 right wall). */
+  spanPoly(i0: number, i1: number, f0 = -1, f1 = 1): number[] {
+    const left: number[] = [], right: number[] = [];
+    for (let i = i0; ; i = (i + 1) % this.n) {
+      left.push(this.cx[i] + this.nx[i] * this.hw[i] * f0, this.cy[i] + this.ny[i] * this.hw[i] * f0);
+      right.push(this.cx[i] + this.nx[i] * this.hw[i] * f1, this.cy[i] + this.ny[i] * this.hw[i] * f1);
+      if (i === i1) break;
+    }
+    const out = left;
+    for (let k = right.length - 2; k >= 0; k -= 2) out.push(right[k], right[k + 1]);
+    return out;
+  }
+
+  private buildGimmicks(idx: (f: number) => number): void {
+    const def = this.def;
+    const at = (i: number, off: number) => [this.cx[i] + this.nx[i] * this.hw[i] * off, this.cy[i] + this.ny[i] * this.hw[i] * off];
+    const ang = (i: number) => Math.atan2(this.ty[i], this.tx[i]);
+    for (const p of def.portals ?? []) {
+      const a = idx(p.from), b = idx(p.to);
+      const [ax, ay] = at(a, p.offset ?? 0), [bx, by] = at(b, p.toOffset ?? p.offset ?? 0);
+      this.portals.push({ ax, ay, aAngle: ang(a), bx, by, bAngle: ang(b), r: p.radius ?? 46, twoWay: false, color: 0x5ad1ff });
+    }
+    for (const h of def.hazards ?? []) {
+      const i = idx(h.at);
+      const [cx, cy] = at(i, h.offset ?? 0);
+      const hz: Hazard = { kind: h.kind, cx, cy, len: h.len ?? this.hw[i] * 1.3, speed: h.speed ?? (h.kind === 'spin' ? 1.4 : 0.35), phase: h.phase ?? 0, arms: h.arms };
+      if (h.kind === 'slide') {
+        // Slides across the track; the bar lies along the track direction.
+        hz.ux = this.nx[i]; hz.uy = this.ny[i]; hz.amp = this.hw[i] * 0.55; hz.len = h.len ?? 90;
+      }
+      this.hazards.push(hz);
+    }
+    for (const sf of def.surfaces ?? []) {
+      const [f0, f1] = sf.side === 'left' ? [-1, 0] : sf.side === 'right' ? [0, 1] : [-1, 1];
+      this.surfaces.push({ ...region(this.spanPoly(idx(sf.from), idx(sf.to), f0, f1)), kind: sf.kind });
+    }
+    for (const j of def.jumps ?? []) {
+      const i0 = idx(j.at);
+      const i1 = this.wrap(i0 + 4);
+      const p0 = this.wrap(i1 + 3);
+      const p1 = this.wrap(p0 + Math.round((j.gap ?? 170) / SPACING));
+      this.ramps.push({ ...region(this.spanPoly(i0, i1)), dx: this.tx[i0], dy: this.ty[i0] });
+      this.pits.push(region(this.spanPoly(p0, p1, -1.05, 1.05)));
+      this.pitSpans.push([i0, p1]);
+    }
+  }
+
+  /** After a pit fall: back on the centreline a little before the jump, facing forward. */
+  respawnPoint(s: RespawnInfo): { x: number; y: number; angle: number } {
+    let i = s.idx;
+    for (const [a, b] of this.pitSpans) if (this.inRange(i, a, b)) i = this.wrap(a - 40);
+    return { x: this.cx[i], y: this.cy[i], angle: Math.atan2(this.ty[i], this.tx[i]) };
   }
 
   private buildSegments(): void {
@@ -199,23 +260,7 @@ export class Track {
     const add = (ax: number, ay: number, bx: number, by: number, inwardRight: boolean) => {
       const dx = bx - ax, dy = by - ay;
       const l = Math.hypot(dx, dy) || 1;
-      const nx = inwardRight ? -dy / l : dy / l;
-      const ny = inwardRight ? dx / l : -dx / l;
-      const id = this.segments.length;
-      this.segments.push({ ax, ay, bx, by, nx, ny });
-      const x0 = Math.floor(Math.min(ax, bx) / CELL), x1 = Math.floor(Math.max(ax, bx) / CELL);
-      const y0 = Math.floor(Math.min(ay, by) / CELL), y1 = Math.floor(Math.max(ay, by) / CELL);
-      for (let gx = x0; gx <= x1; gx++) {
-        for (let gy = y0; gy <= y1; gy++) {
-          const key = this.cellKey(gx, gy);
-          let list = this.grid.get(key);
-          if (!list) this.grid.set(key, (list = []));
-          list.push(id);
-        }
-      }
-      const b = this.bounds;
-      b.minX = Math.min(b.minX, ax); b.maxX = Math.max(b.maxX, ax);
-      b.minY = Math.min(b.minY, ay); b.maxY = Math.max(b.maxY, ay);
+      this.addSegment({ ax, ay, bx, by, nx: inwardRight ? -dy / l : dy / l, ny: inwardRight ? dx / l : -dx / l });
     };
     for (let i = 0; i < n; i++) {
       const k = (i + 1) % n;
@@ -241,30 +286,6 @@ export class Track {
       }
     }
     return off;
-  }
-
-  private cellKey(gx: number, gy: number): number {
-    return (gx + 32768) * 65536 + (gy + 32768);
-  }
-
-  /** Unique wall segment ids near a point (3x3 cells). The returned array is reused. */
-  query(x: number, y: number): number[] {
-    const out = this.queryOut;
-    out.length = 0;
-    const id = ++this.stampId;
-    const gx = Math.floor(x / CELL), gy = Math.floor(y / CELL);
-    for (let ox = -1; ox <= 1; ox++) {
-      for (let oy = -1; oy <= 1; oy++) {
-        const list = this.grid.get(this.cellKey(gx + ox, gy + oy));
-        if (!list) continue;
-        for (const s of list) {
-          if (this.stamp[s] === id) continue;
-          this.stamp[s] = id;
-          out.push(s);
-        }
-      }
-    }
-    return out;
   }
 
   /** Nearest centreline sample, searching near `hint` first. */

@@ -1,6 +1,6 @@
 import { Bot, type Tier } from './ai';
 import { GhostRecorder, type Ghost } from './ghost';
-import { collideShips, intentFrom, makeShip, stepShip, type Scheme, type Ship } from './physics';
+import { collideShips, inFlip, intentFrom, makeShip, stepShip, type Scheme, type Ship } from './physics';
 import { Track } from './track';
 
 export interface RacerSpec {
@@ -100,6 +100,8 @@ export class Race {
 
   get humans(): Racer[] { return this.racers.filter((r) => r.human); }
 
+  get course(): Track { return this.track; }
+
   /** Advance one fixed step. `input[slot]` is that human's buttons. */
   step(input: Buttons[]): void {
     const dt = STEP;
@@ -113,12 +115,15 @@ export class Race {
     if (prevTime < 0) this.time = Math.max(this.time, 0);
 
     this.applyRubberBand();
+    t.update(this.time);
     for (const r of this.racers) {
       if (r.out) continue;
       let b: Buttons;
-      if (r.autopilot) b = r.autopilot.think(r.ship, t, dt, this.time);
-      else if (r.bot) b = r.bot.think(r.ship, t, dt, this.time);
-      else b = input[r.spec.slot ?? 0] ?? { left: false, right: false };
+      if (r.autopilot || r.bot) {
+        b = (r.autopilot ?? r.bot)!.think(r.ship, t, dt, this.time);
+        // Bots know about flip zones and pre-swap their inputs.
+        if (inFlip(r.ship, t)) b = { left: b.right, right: b.left };
+      } else b = input[r.spec.slot ?? 0] ?? { left: false, right: false };
       r.left = b.left; r.right = b.right;
       const scheme = r.human && !r.autopilot ? this.config.scheme : 'thrust';
       const prev = r.ship.idx;
@@ -127,7 +132,7 @@ export class Race {
       if (r.recorder && !r.finished) r.recorder.sample(r.ship, this.time - r.lapStart);
     }
     if (this.config.collisions) {
-      const live = this.racers.filter((r) => !r.out);
+      const live = this.racers.filter((r) => !r.out && r.ship.fall <= 0 && r.ship.air <= 0);
       for (let i = 0; i < live.length; i++) {
         for (let j = i + 1; j < live.length; j++) collideShips(live[i].ship, live[j].ship);
       }

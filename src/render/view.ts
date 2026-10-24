@@ -1,8 +1,11 @@
 import { Container, Graphics, Sprite, Texture } from 'pixi.js';
 import { clamp, mulberry32 } from '../core/math';
-import type { Race, Racer } from '../core/race';
+import type { Course } from '../core/course';
+import { PHYS } from '../core/physics';
+import type { Racer } from '../core/race';
+import { Track } from '../core/track';
+import { chevron, GimmickLayer } from './gimmicks';
 import { hullById, type Hull } from '../core/ships';
-import type { Track } from '../core/track';
 
 export interface Pose { x: number; y: number; angle: number }
 
@@ -24,17 +27,18 @@ function glowWall(parent: Container, xs: Float64Array, ys: Float64Array, color: 
   }
 }
 
-function chevron(g: Graphics, size: number, color: number, width = 4): Graphics {
-  return g.moveTo(-size * 0.5, -size).lineTo(size * 0.5, 0).lineTo(-size * 0.5, size).stroke({ width, color, cap: 'round', join: 'round' });
-}
 
 interface Pulse { g: Container; phase: number; base: number }
-interface Ring { g: Graphics; t: number; inward: boolean }
+
+/** A course's static art; animated once per frame. */
+export type BaseLayer = Container & { animate(time: number): void };
+
+/** What a View draws: a course, its racers and the clock. */
+export interface Scene { course: Course; racers: Racer[]; time: number }
 
 /** Static track art plus animated field markers. Built once per viewport. */
 class TrackLayer extends Container {
   private pulses: Pulse[] = [];
-  private rings: Ring[] = [];
 
   constructor(track: Track) {
     super();
@@ -105,25 +109,6 @@ class TrackLayer extends Container {
       }
     }
 
-    for (const w of track.wells) {
-      const color = w.strength > 0 ? 0xb06bff : 0xff7a3d;
-      const halo = new Graphics().circle(w.x, w.y, w.radius).fill({ color, alpha: 0.025 }).circle(w.x, w.y, w.radius).stroke({ width: 2, color, alpha: 0.12 });
-      this.addChild(halo);
-      const core = new Graphics()
-        .circle(w.x, w.y, 34).fill({ color, alpha: 0.18 })
-        .circle(w.x, w.y, 16).fill({ color, alpha: 0.7 })
-        .circle(w.x, w.y, 6).fill({ color: 0xffffff });
-      core.blendMode = 'add';
-      this.addChild(core);
-      for (let k = 0; k < 4; k++) {
-        const g = new Graphics().circle(0, 0, w.radius).stroke({ width: 3, color, alpha: 1 });
-        g.position.set(w.x, w.y);
-        g.blendMode = 'add';
-        this.addChild(g);
-        this.rings.push({ g, t: k / 4, inward: w.strength > 0 });
-      }
-    }
-
     // Start line: a checker strip across sample 0.
     const start = new Graphics();
     const cells = 10;
@@ -145,21 +130,19 @@ class TrackLayer extends Container {
 
   animate(time: number): void {
     for (const p of this.pulses) p.g.alpha = p.base + 0.6 * Math.max(0, Math.sin(p.phase - time * 5)) ** 2;
-    for (const r of this.rings) {
-      let f = (r.t + time * 0.35) % 1;
-      if (r.inward) f = 1 - f;
-      r.g.scale.set(Math.max(0.01, f));
-      r.g.alpha = 0.22 * Math.sin(f * Math.PI);
-    }
   }
 }
 
 class ShipSprite extends Container {
   readonly flames: Graphics[] = [];
+  private shade: Graphics;
   constructor(hull: Hull, color: number, alpha = 1) {
     super();
     const scale = 1;
     const sc = (pts: number[]) => pts.map((v) => v * scale);
+    this.shade = new Graphics().poly(sc(hull.body)).fill({ color: 0x000000, alpha: 0.55 });
+    this.shade.visible = false;
+    this.addChild(this.shade);
     const glow = new Graphics().poly(sc(hull.body)).stroke({ width: 7, color, alpha: 0.16, join: 'round' });
     glow.blendMode = 'add';
     this.addChild(glow);
@@ -177,6 +160,16 @@ class ShipSprite extends Container {
     this.alpha = alpha;
   }
 
+  /** Drop shadow while airborne (h = 0..1 height). */
+  shadow(h: number): void {
+    this.shade.visible = h > 0.01;
+    if (!this.shade.visible) return;
+    // Offset down-right in world space, compensating for the ship's own rotation and scale.
+    const d = 6 + h * 26, a = -this.rotation;
+    this.shade.position.set((Math.cos(a) * d - Math.sin(a) * d) / this.scale.x, (Math.sin(a) * d + Math.cos(a) * d) / this.scale.x);
+    this.shade.scale.set(1 / this.scale.x);
+  }
+
   flame(on: boolean, len: number, tint: number): void {
     for (const f of this.flames) {
       f.visible = on;
@@ -191,7 +184,8 @@ interface Spark { s: Sprite; vx: number; vy: number; life: number; max: number }
 export class View {
   readonly root = new Container();
   private world = new Container();
-  private layer: TrackLayer;
+  private layer: BaseLayer;
+  private gimmicks: GimmickLayer;
   private ships: ShipSprite[] = [];
   private trails: { pts: number[]; g: Graphics }[] = [];
   private ghost: ShipSprite;
@@ -212,9 +206,10 @@ export class View {
   private shake = 0;
   private rand = mulberry32(7);
 
-  constructor(private race: Race, readonly follow: Racer, private ghostPose: () => Pose | null) {
-    this.layer = new TrackLayer(race.track);
-    this.world.addChild(this.layer);
+  constructor(private race: Scene, readonly follow: Racer, private ghostPose: () => Pose | null, base?: BaseLayer) {
+    this.layer = base ?? new TrackLayer(race.course as Track);
+    this.gimmicks = new GimmickLayer(race.course);
+    this.world.addChild(this.layer, this.gimmicks);
     const trailLayer = new Container();
     trailLayer.blendMode = 'add';
     this.world.addChild(trailLayer);
@@ -239,17 +234,23 @@ export class View {
   }
 
   private buildMinimap(): void {
-    const t = this.race.track;
-    const b = t.bounds;
+    const course = this.race.course;
+    const b = course.bounds;
     const size = 130;
     this.miniScale = size / Math.max(b.maxX - b.minX, b.maxY - b.minY);
     this.miniOx = -b.minX * this.miniScale + (size - (b.maxX - b.minX) * this.miniScale) / 2;
     this.miniOy = -b.minY * this.miniScale + (size - (b.maxY - b.minY) * this.miniScale) / 2;
     const g = new Graphics();
     g.roundRect(-10, -10, size + 20, size + 20, 10).fill({ color: 0x000000, alpha: 0.35 });
-    g.moveTo(t.cx[0] * this.miniScale + this.miniOx, t.cy[0] * this.miniScale + this.miniOy);
-    for (let i = 4; i < t.n; i += 4) g.lineTo(t.cx[i] * this.miniScale + this.miniOx, t.cy[i] * this.miniScale + this.miniOy);
-    g.closePath().stroke({ width: 3, color: t.def.color, alpha: 0.5 });
+    const X = (x: number) => x * this.miniScale + this.miniOx, Y = (y: number) => y * this.miniScale + this.miniOy;
+    if (course instanceof Track) {
+      g.moveTo(X(course.cx[0]), Y(course.cy[0]));
+      for (let i = 4; i < course.n; i += 4) g.lineTo(X(course.cx[i]), Y(course.cy[i]));
+      g.closePath().stroke({ width: 3, color: course.def.color, alpha: 0.5 });
+    } else {
+      for (const sg of course.segments) g.moveTo(X(sg.ax), Y(sg.ay)).lineTo(X(sg.bx), Y(sg.by));
+      g.stroke({ width: 1.5, color: 0x2ef2ff, alpha: 0.6 });
+    }
     this.minimap.addChild(g, this.miniDots);
   }
 
@@ -266,6 +267,7 @@ export class View {
     const race = this.race;
     const time = Math.max(0, race.time) + 10;
     this.layer.animate(time);
+    this.gimmicks.animate(time);
 
     race.racers.forEach((r, i) => {
       const s = r.ship;
@@ -277,11 +279,25 @@ export class View {
       }
       sp.position.set(s.x, s.y);
       sp.rotation = s.angle;
+      // Airborne ships swell toward the camera; falling ones shrink into the pit.
+      const airF = s.air > 0 && s.airMax > 0 ? Math.sin(Math.PI * (1 - s.air / s.airMax)) : 0;
+      const fallF = s.fall > 0 ? s.fall / PHYS.fallTime : 1;
+      sp.scale.set((1 + airF * 0.7) * fallF);
+      sp.alpha = s.fall > 0 ? fallF : 1;
+      sp.shadow(airF);
       sp.flame(s.throttle > 0 || s.scrape > 0, 0.6 + Math.random() * 0.5 + (s.boost > 0 || s.scrape > 0 ? 0.8 : 0),
         s.boost > 0 ? 0xffe14d : s.scrape > 0 ? 0xff7a3d : r.spec.color);
 
       const trail = this.trails[i];
       const pts = trail.pts;
+      if (s.warped > 0.3 || s.fall > 0) pts.length = 0;
+      if (s.warped > 0.33) {
+        for (let k = 0; k < 18; k++) {
+          const a = this.rand() * Math.PI * 2, v = 60 + this.rand() * 260;
+          this.spark(s.x, s.y, Math.cos(a) * v, Math.sin(a) * v, 0x5ad1ff, 0.4);
+        }
+        s.warped = 0.3;
+      }
       const lx = pts[pts.length - 2], ly = pts[pts.length - 1];
       if (pts.length === 0 || (s.x - lx) ** 2 + (s.y - ly) ** 2 > 36) {
         pts.push(s.x - Math.cos(s.angle) * 8, s.y - Math.sin(s.angle) * 8);
