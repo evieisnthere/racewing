@@ -19,12 +19,21 @@ export interface Settings {
   callsign: string;
   radio: boolean;
   vibrate: boolean;
+  /** Campaign bot strength: -1 relaxed, 0 normal, 1 hard. */
+  assist: number;
+  /** Snake tails in Quick Race / split-screen. */
+  snake: boolean;
+  /** Snake Battle setup. */
+  arena: string;
+  lives: number;
+  /** Settings layout version (for one-off migrations). */
+  v: number;
 }
 
 const DEFAULTS: Settings = {
-  scheme: 'thrust', rubberBand: true, collisions: true, ghosts: true,
+  scheme: 'manual', rubberBand: true, collisions: true, ghosts: true,
   laps: 3, bots: 5, tier: 'medium', track: 'pulse', name: 'Player 1', name2: 'Player 2', music: 0.6, sfx: 0.8,
-  hull: 'dart', color: 0x2ef2ff, callsign: '', radio: true, vibrate: true,
+  hull: 'dart', color: 0x2ef2ff, callsign: '', radio: true, vibrate: true, assist: -1, snake: false, arena: 'A1', lives: 4, v: 2,
 };
 
 const PREFIX = 'racewing.';
@@ -41,7 +50,15 @@ function set(key: string, value: string | null): void {
 }
 
 export function loadSettings(): Settings {
-  try { return { ...DEFAULTS, ...JSON.parse(get('settings') ?? '{}') }; } catch { return { ...DEFAULTS }; }
+  let raw: Partial<Settings> = {};
+  try { raw = JSON.parse(get('settings') ?? '{}'); } catch { raw = {}; }
+  const s: Settings = { ...DEFAULTS, ...raw };
+  if ((raw.v ?? 1) < 2) {
+    // v2: W-to-thrust became the default; anyone still on the old always-thrust default moves over.
+    if (s.scheme === 'thrust') s.scheme = 'manual';
+    s.v = 2;
+  }
+  return s;
 }
 
 export function saveSettings(s: Settings): void {

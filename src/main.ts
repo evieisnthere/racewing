@@ -26,6 +26,9 @@ import { PuzzleRun, puzzleTargets, RouteBot } from './core/puzzle';
 import { LevelLayer } from './render/levelLayer';
 import { Hud } from './ui/hud';
 import { PuzzleHud } from './ui/puzzleHud';
+import { BattleHud } from './ui/battleHud';
+import { BattleRun } from './core/battle';
+import { ARENAS } from './core/arenas';
 import { portrait } from './ui/portrait';
 
 type Mode = 'race' | 'tt' | 'split' | 'attract' | 'campaign';
@@ -64,6 +67,17 @@ interface PuzzleSession {
   prevBest: number;
 }
 
+interface BattleSession {
+  run: BattleRun;
+  players: number;
+  views: View[];
+  huds: BattleHud[];
+  paused: boolean;
+  acc: number;
+  resultsShown: boolean;
+  lastCount: number;
+}
+
 const medalOf = (t: number, targets: [number, number, number]) => (t <= targets[2] ? 3 : t <= targets[1] ? 2 : t <= targets[0] ? 1 : 0);
 const MEDAL_CLASS = ['none', 'b', 's', 'g'];
 const MEDAL_NAME = ['No medal', 'Bronze', 'Silver', 'Gold'];
@@ -98,6 +112,8 @@ class Game {
   private session: Session | null = null;
   private puzzle: PuzzleSession | null = null;
   private puzzleId = 'L1';
+  private battle: BattleSession | null = null;
+  private battlePlayers = 1;
   private puzzleBests = loadPuzzleBests();
   private menu = document.getElementById('menu') as HTMLDivElement;
   private hudLayer = document.getElementById('hud') as HTMLDivElement;
@@ -163,7 +179,10 @@ class Game {
       return { name: c.name.split(' ')[0], color: c.color, hull: c.hull, who, kind: 'bot', tier };
     };
     if (event) {
-      for (const o of event.field) racers.push(pilot(o.who, o.tier));
+      const TIERS: Tier[] = ['easy', 'medium', 'hard', 'insane'];
+      // Campaign bot strength setting shifts every opponent up or down a tier.
+      const shift = (t: Tier) => TIERS[Math.max(0, Math.min(3, TIERS.indexOf(t) + (s.assist ?? 0)))];
+      for (const o of event.field) racers.push(pilot(o.who, shift(o.tier)));
     } else {
       const botCount = mode === 'tt' ? 0 : mode === 'attract' ? 6 : Math.min(s.bots, 6 - humans);
       const crew = [...PIT_CREW].sort(() => Math.random() - 0.5);
@@ -186,6 +205,7 @@ class Game {
       scheme: s.scheme,
       rubberBand: mode !== 'attract' && s.rubberBand,
       collisions: !timeTrial && s.collisions,
+      snake: !timeTrial && !event && mode !== 'attract' && s.snake,
       seed: Math.floor(Math.random() * 1e6),
     });
     if (AUTOPILOT) race.humans.forEach((h, i) => { h.autopilot = new Bot('insane', 5 + i); });
@@ -250,6 +270,105 @@ class Game {
     p.view.destroy();
     p.hud.destroy();
     this.puzzle = null;
+  }
+
+  private startBattle(players: number): void {
+    this.end();
+    const s = this.settings;
+    const arena = ARENAS.find((a) => a.id === s.arena) ?? ARENAS[0];
+    const crew = [...PIT_CREW].sort(() => Math.random() - 0.5);
+    const racers: RacerSpec[] = [];
+    const bots = Math.min(s.bots, 6 - players);
+    for (let i = 0; i < bots; i++) {
+      const c = char(crew[i]);
+      racers.push({ name: c.name.split(' ')[0], color: c.color, hull: c.hull, who: crew[i], kind: 'bot', tier: s.tier === 'mixed' ? MIXED[i] : s.tier });
+    }
+    const p2Color = PLAYER_COLORS.find((c) => c !== s.color) ?? 0xff3df2;
+    for (let i = 0; i < players; i++) {
+      racers.push({ name: i === 0 ? s.callsign || s.name : s.name2, color: i === 0 ? s.color : p2Color, hull: i === 0 ? s.hull : 'wasp', kind: 'human', slot: i });
+    }
+    const run = new BattleRun({ arena, racers, lives: s.lives, timeLimit: 120, scheme: s.scheme, seed: Math.floor(Math.random() * 1e6) });
+    const b: BattleSession = { run, players, views: [], huds: [], paused: false, acc: 0, resultsShown: false, lastCount: 99 };
+    for (const r of run.humans) {
+      const view = new View(run, r, () => null, new LevelLayer(run.course));
+      this.app.stage.addChild(view.root);
+      b.views.push(view);
+      b.huds.push(new BattleHud(this.hudLayer, run, r));
+    }
+    this.battle = b;
+    this.input.clear();
+    this.layout();
+    sound.setEngines(players);
+    sound.setIntensity(0.7);
+    this.pauseBtn.classList.toggle('show', coarse);
+    this.touchHint.classList.toggle('show', coarse && players === 1);
+    this.hide();
+  }
+
+  private endBattle(): void {
+    const b = this.battle;
+    if (!b) return;
+    for (const v of b.views) v.destroy();
+    for (const h of b.huds) h.destroy();
+    this.battle = null;
+  }
+
+  private battleFrame(dt: number): void {
+    const b = this.battle!;
+    const run = b.run;
+    if (!b.paused) {
+      b.acc += dt;
+      let steps = 0;
+      while (b.acc >= STEP && steps < 60) {
+        run.step(this.input.read(b.players));
+        b.acc -= STEP;
+        steps++;
+      }
+      const hudOf = (r: Racer | null) => (r ? b.huds[run.humans.indexOf(r)] : undefined);
+      for (const ev of run.events) {
+        if (ev.type === 'go') sound.countdown(true);
+        else if (ev.type === 'orb') { if (ev.racer.human) sound.pickup(); }
+        else if (ev.type === 'whip') {
+          const mine = ev.racer.human || ev.target.human;
+          if (mine) { sound.hit(ev.power * 1.5); this.buzz(ev.target.human ? 40 : 20); }
+          if (ev.racer.human && ev.power > 160) hudOf(ev.racer)?.flash('WHIP!', 'best');
+        } else if (ev.type === 'fall') {
+          for (const v of b.views) v.burst(ev.racer.ship.x, ev.racer.ship.y, ev.racer.spec.color);
+          if (ev.racer.human) { hudOf(ev.racer)?.flash(ev.by ? `${ev.by.spec.name.toUpperCase()} GOT YOU` : 'FELL'); this.buzz(60); }
+          if (ev.by?.human) { hudOf(ev.by)?.flash(`SHOVED ${ev.racer.spec.name.toUpperCase()}`, 'best'); sound.chime('best'); }
+        } else if (ev.type === 'out') {
+          sound.chime('out');
+          for (const [i, h] of b.huds.entries()) h.flash(run.humans[i] === ev.racer ? 'KNOCKED OUT' : `${ev.racer.spec.name.toUpperCase()} OUT`, run.humans[i] === ev.racer ? '' : 'best');
+        } else if (ev.type === 'win') {
+          sound.chime('finish');
+          this.buzz([40, 60, 40]);
+          for (const [i, h] of b.huds.entries()) h.flash(ev.racer === run.humans[i] ? 'YOU WIN' : ev.racer ? `${ev.racer.spec.name.toUpperCase()} WINS` : 'DRAW', 'record');
+        }
+      }
+      run.events.length = 0;
+    }
+    if (run.time < 0) {
+      const c = Math.ceil(-run.time);
+      if (c !== b.lastCount && c <= 3) sound.countdown(false);
+      b.lastCount = c;
+    }
+    run.humans.forEach((h, i) => {
+      const sh = h.ship;
+      sound.updateEngine(i, Math.hypot(sh.vx, sh.vy), b.paused || h.out ? 0 : sh.throttle, sh.scrape > 0 && !b.paused, !b.paused && !h.out);
+      if (!b.paused) this.shipSfx(sh);
+      if (sh.hit > 120) sound.hit(sh.hit);
+    });
+    const sides = !b.paused ? this.input.touchSides() : { left: false, right: false };
+    this.pressL.classList.toggle('on', sides.left);
+    this.pressR.classList.toggle('on', sides.right);
+    for (const v of b.views) v.update(b.paused ? 0 : dt);
+    for (const h of b.huds) h.update(dt);
+    if (coarse && run.time > 3) this.touchHint.classList.remove('show');
+    if (run.state === 'finished' && !b.resultsShown && run.time - run.finishedAt > 2) {
+      b.resultsShown = true;
+      sound.setIntensity(0.3);
+      this.show('bresults');
+    }
   }
 
   private puzzleFrame(dt: number): void {
@@ -329,6 +448,7 @@ class Game {
 
   private end(): void {
     this.endPuzzle();
+    this.endBattle();
     const s = this.session;
     if (!s) return;
     for (const v of s.views) v.destroy();
@@ -362,7 +482,7 @@ class Game {
       this.puzzle.hud.layout(w, h);
       return;
     }
-    const s = this.session;
+    const s = this.session ?? this.battle;
     if (!s) return;
     const rects: [number, number, number, number][] = s.views.length === 1
       ? [[0, 0, w, h]]
@@ -375,6 +495,7 @@ class Game {
 
   private frame(dt: number): void {
     if (this.puzzle) { this.puzzleFrame(dt); return; }
+    if (this.battle) { this.battleFrame(dt); return; }
     const s = this.session;
     if (!s) return;
     const race = s.race;
@@ -511,9 +632,16 @@ class Game {
         for (const [i, h] of s.huds.entries()) h.flash(i === hi ? 'KNOCKED OUT' : `${ev.racer.spec.name.toUpperCase()} OUT`, i === hi ? '' : 'best');
         continue;
       }
+      if (ev.type === 'whip') {
+        const ti = race.humans.indexOf(ev.target);
+        if (ti >= 0 || ev.racer.human) { sound.hit(ev.power * 1.5); this.buzz(ti >= 0 ? 40 : 20); }
+        if (ev.racer.human && ev.power > 160) s.huds[race.humans.indexOf(ev.racer)]?.flash('WHIP!', 'best');
+        continue;
+      }
       const hi = race.humans.indexOf(ev.racer);
       const hud = hi >= 0 ? s.huds[hi] : null;
       if (!hud) continue;
+      if (ev.type === 'orb') { sound.pickup(); continue; }
       if (ev.type === 'lap') {
         const key = race.track.key;
         const record = ev.time < bestLap(key);
@@ -578,6 +706,13 @@ class Game {
   }
 
   private togglePause(): void {
+    const b = this.battle;
+    if (b) {
+      if (b.resultsShown) return;
+      b.paused = !b.paused;
+      if (b.paused) this.show('pause'); else this.hide();
+      return;
+    }
     const p = this.puzzle;
     if (p) {
       if (p.resultsShown) return;
@@ -592,6 +727,7 @@ class Game {
   }
 
   private respawn(slot: number): void {
+    if (this.battle) return;
     const p = this.puzzle;
     if (p) {
       // Back to the last checkpoint.
@@ -643,6 +779,7 @@ class Game {
             <button data-action="setup" data-mode="tt">Time Trial</button>
             <button data-action="setup" data-mode="split">Split-screen</button>
             <button data-action="go" data-to="puzzles">Puzzles</button>
+            <button data-action="go" data-to="battle">Snake Battle</button>
             <button data-action="go" data-to="gen">Track Generator</button>
             <button data-action="go" data-to="hangar">Hangar</button>
             <button data-action="go" data-to="settings">Settings</button>
@@ -651,7 +788,7 @@ class Game {
       case 'campaign':
         return renderMap(this.progress);
       case 'brief':
-        return renderBrief(nodeById(this.eventId)!, this.progress, s.callsign || s.name);
+        return renderBrief(nodeById(this.eventId)!, this.progress, s.callsign || s.name, s.assist ?? 0);
       case 'dialogue':
         return renderDialogue(this.dialogue!.lines, this.dialogue!.i, s.callsign || s.name);
       case 'callsign':
@@ -668,12 +805,18 @@ class Game {
         return `
           <h2>Settings</h2>
           <div class="opt wide"><span>Controls</span><div class="seg">
+            <button class="${s.scheme === 'manual' ? 'sel' : ''}" data-action="scheme" data-v="manual">Thrust key</button>
             <button class="${s.scheme === 'thrust' ? 'sel' : ''}" data-action="scheme" data-v="thrust">Always thrust</button>
             <button class="${s.scheme === 'classic' ? 'sel' : ''}" data-action="scheme" data-v="classic">Classic</button>
           </div></div>
-          <p class="note">${s.scheme === 'thrust'
-            ? 'Always thrusting. Hold one side to turn. Hold <b>both</b> to brake, then reverse.'
-            : 'Hold one side to turn while coasting. Hold <b>both</b> to thrust.'}</p>
+          <p class="note">${s.scheme === 'manual'
+            ? '<kbd>W</kbd>/<kbd>↑</kbd> thrust, <kbd>A</kbd><kbd>D</kbd>/<kbd>←</kbd><kbd>→</kbd> turn, <kbd>S</kbd>/<kbd>↓</kbd> brake then reverse. Gamepad: A or RT thrust, B or LT brake. On touch, hold both sides to thrust.'
+            : s.scheme === 'thrust'
+              ? 'Always thrusting. Hold one side to turn. Hold <b>both</b> to brake, then reverse.'
+              : 'Hold one side to turn while coasting. Hold <b>both</b> to thrust.'}</p>
+          <div class="opt wide"><span>Campaign bots</span><div class="seg">
+            ${[[-1, 'Relaxed'], [0, 'Normal'], [1, 'Hard']].map(([v, l]) => `<button class="${s.assist === v ? 'sel' : ''}" data-action="assist" data-v="${v}">${l}</button>`).join('')}
+          </div></div>
           ${slider('music', 'Music', s.music)}
           ${slider('sfx', 'Sound effects', s.sfx)}
           <p class="note"><kbd>M</kbd> mutes everything.</p>
@@ -689,11 +832,12 @@ class Game {
         return `
           <h2>How to play</h2>
           <ul class="help">
-            <li><b>Two buttons.</b> Left half / right half of the screen, <kbd>A</kbd>/<kbd>D</kbd>, <kbd>←</kbd>/<kbd>→</kbd>, or gamepad bumpers / d-pad.</li>
-            <li><b>Always thrust</b> (default): one button turns, both together brake and then reverse. Switch to <i>Classic</i> in Settings.</li>
+            <li><b>Keyboard:</b> <kbd>W</kbd>/<kbd>↑</kbd> thrust, <kbd>A</kbd><kbd>D</kbd>/<kbd>←</kbd><kbd>→</kbd> turn, <kbd>S</kbd>/<kbd>↓</kbd> brake. <b>Gamepad:</b> stick/bumpers turn, A or RT thrust, B or LT brake. <b>Touch:</b> hold the left or right half to turn, both to thrust.</li>
+            <li><b>Momentum:</b> you keep sliding the way you were going. Point your nose where you want to go and thrust to change course. Other control schemes (always thrust, classic) are in Settings.</li>
             <li><b>Grind the walls.</b> Put your <i>engine flame</i> against a wall, tail in and nose angled slightly away, to boost and throw sparks. Nose-first contact just rubs off speed, and head-on hits bounce you.</li>
             <li><b>Green chevrons</b> are gravity currents that push you the way they point. <b>Purple wells</b> pull you in; <b>orange wells</b> push you away.</li>
             <li><b>Yellow arrows</b> are boost pads.</li>
+            <li><b>Snake tails</b> (Quick Race option, and Snake Battle): turn hard to flick your tail into rivals. Orbs grow it; big wall hits shed it. In Snake Battle, shove everyone into the pits. You blink for 2 s after a respawn and can't be hit.</li>
             <li><b>Campaign:</b> earn up to 3★ per event (podium places, or bronze/silver/gold lap targets). Stars unlock the next series.</li>
             <li><kbd>R</kbd> or gamepad Y resets your ship to the track. <kbd>Esc</kbd>/<kbd>P</kbd> or Start pauses. <kbd>M</kbd> mutes.</li>
           </ul>
@@ -704,6 +848,10 @@ class Game {
         return this.renderPuzzleBrief();
       case 'presults':
         return this.renderPuzzleResults();
+      case 'battle':
+        return this.renderBattleSetup();
+      case 'bresults':
+        return this.renderBattleResults();
       case 'pause':
         return `
           <h2>Paused</h2>
@@ -852,6 +1000,46 @@ class Game {
       </div>`;
   }
 
+  private renderBattleSetup(): string {
+    const s = this.settings;
+    const tiers: (Tier | 'mixed')[] = ['easy', 'medium', 'hard', 'insane', 'mixed'];
+    const maxBots = 6 - this.battlePlayers;
+    return `
+      <h2>Snake Battle</h2>
+      <p class="tag">Every ship drags a tail. Turn hard to flick it and shove rivals into the pits. Orbs grow your tail. Last ship flying wins.</p>
+      <div class="levels">${ARENAS.map((a) => `
+        <button class="level ${a.id === s.arena ? 'sel' : ''}" data-action="arena" data-id="${a.id}" style="--c:${hex(a.color)}">
+          <canvas width="200" height="110" data-level="${a.id}"></canvas>
+          <b>${esc(a.name)}</b><em>${esc(a.blurb)}</em>
+        </button>`).join('')}</div>
+      <div class="opts">
+        <div class="opt"><span>Players</span><div class="seg">${[1, 2].map((n) => `<button class="${this.battlePlayers === n ? 'sel' : ''}" data-action="bplayers" data-v="${n}">${n}P</button>`).join('')}</div></div>
+        <div class="opt"><span>Lives</span><div class="stepper"><button data-action="lives" data-d="-1">−</button><b>${s.lives}</b><button data-action="lives" data-d="1">+</button></div></div>
+        <div class="opt"><span>Bots</span><div class="stepper"><button data-action="bots" data-d="-1">−</button><b>${Math.min(s.bots, maxBots)}</b><button data-action="bots" data-d="1">+</button></div></div>
+        <div class="opt wide"><span>Bot skill</span><div class="seg">${tiers.map((t) => `<button class="${s.tier === t ? 'sel' : ''}" data-action="tier" data-tier="${t}">${t === 'mixed' ? 'Mixed' : TIER_NAMES[t]}</button>`).join('')}</div></div>
+      </div>
+      ${this.battlePlayers === 2 ? '<p class="note">P1: <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or gamepad 1 · P2: arrow keys or gamepad 2</p>' : ''}
+      <div class="row"><button data-action="go" data-to="main">Back</button><button class="primary" data-action="bstart">Start</button></div>`;
+  }
+
+  private renderBattleResults(): string {
+    const b = this.battle!;
+    const run = b.run;
+    const order = [...run.racers].sort((x, y) => x.place - y.place);
+    const win = order[0];
+    const rows = order.map((r) => `
+      <tr class="${r.human ? 'me' : ''}">
+        <td>${r.place}</td>
+        <td><i style="background:${hex(r.spec.color)}"></i>${esc(r.spec.name)}${r.bot ? `<small>${TIER_NAMES[r.bot.tier]}</small>` : r.spec.tier ? `<small>${TIER_NAMES[r.spec.tier]}</small>` : ''}</td>
+        <td>${r.out ? `out ${formatTime(r.outTime)}` : `${run.livesOf(r)} ♦`}</td>
+        <td>tail ${r.tail?.n ?? 0}</td>
+      </tr>`).join('');
+    return `
+      <h2>${win?.human ? (b.players > 1 ? `${esc(win.spec.name)} wins!` : 'You win!') : `${esc(win?.spec.name ?? 'Nobody')} wins`}</h2>
+      <table class="results"><tr><th>#</th><th>Pilot</th><th>Lives</th><th>Tail</th></tr>${rows}</table>
+      <div class="row"><button data-action="bquit">Arenas</button><button class="primary" data-action="restart">Again</button></div>`;
+  }
+
   private renderSetup(): string {
     const s = this.settings;
     const m = this.setupMode;
@@ -875,7 +1063,8 @@ class Game {
         <div class="opt"><span>Bots</span><div class="stepper"><button data-action="bots" data-d="-1">−</button><b>${Math.min(s.bots, maxBots)}</b><button data-action="bots" data-d="1">+</button></div></div>
         <div class="opt wide"><span>Bot skill</span><div class="seg">${tiers.map((t) => `<button class="${s.tier === t ? 'sel' : ''}" data-action="tier" data-tier="${t}">${t === 'mixed' ? 'Mixed' : TIER_NAMES[t]}</button>`).join('')}</div></div>
         ${toggle('rubberBand', 'Rubber-band bots', s.rubberBand)}
-        ${toggle('collisions', 'Ship collisions', s.collisions)}`}
+        ${toggle('collisions', 'Ship collisions', s.collisions)}
+        ${toggle('snake', 'Snake tails', s.snake)}`}
         ${toggle('ghosts', 'Show ghost', s.ghosts)}
       </div>
       ${m === 'tt' ? `
@@ -1044,9 +1233,27 @@ class Game {
         this.show('setup');
         break;
       case 'laps': s.laps = Math.max(1, Math.min(9, s.laps + Number(d.d))); saveSettings(s); this.show('setup'); break;
-      case 'bots': s.bots = Math.max(0, Math.min(this.setupMode === 'split' ? 4 : 5, s.bots + Number(d.d))); saveSettings(s); this.show('setup'); break;
-      case 'tier': s.tier = d.tier as Tier | 'mixed'; saveSettings(s); this.show('setup'); break;
-      case 'scheme': s.scheme = d.v as 'thrust' | 'classic'; saveSettings(s); this.show('settings'); break;
+      case 'bots': {
+        const max = this.screen === 'battle' ? 6 - this.battlePlayers : this.setupMode === 'split' ? 4 : 5;
+        s.bots = Math.max(this.screen === 'battle' ? 1 : 0, Math.min(max, s.bots + Number(d.d))); saveSettings(s); this.show(this.screen); break;
+      }
+      case 'tier': s.tier = d.tier as Tier | 'mixed'; saveSettings(s); this.show(this.screen); break;
+      case 'arena': s.arena = d.id!; saveSettings(s); this.show('battle'); break;
+      case 'lives': s.lives = Math.max(1, Math.min(9, s.lives + Number(d.d))); saveSettings(s); this.show('battle'); break;
+      case 'bplayers': this.battlePlayers = Number(d.v); this.show('battle'); break;
+      case 'bstart':
+        if (coarse) document.documentElement.requestFullscreen?.().catch(() => {});
+        this.startBattle(this.battlePlayers);
+        break;
+      case 'bquit':
+        this.endBattle();
+        this.startAttract();
+        this.show('battle');
+        this.pauseBtn.classList.remove('show');
+        this.touchHint.classList.remove('show');
+        break;
+      case 'scheme': s.scheme = d.v as 'manual' | 'thrust' | 'classic'; saveSettings(s); this.show('settings'); break;
+      case 'assist': s.assist = Number(d.v); saveSettings(s); this.show('settings'); break;
       case 'start':
         if (coarse) document.documentElement.requestFullscreen?.().catch(() => {});
         void this.start(this.setupMode);
@@ -1054,6 +1261,7 @@ class Game {
       case 'resume': this.togglePause(); break;
       case 'restart': {
         if (this.puzzle) { this.startPuzzle(this.puzzle.def); break; }
+        if (this.battle) { this.startBattle(this.battle.players); break; }
         const cur = this.session;
         void this.start(cur?.mode ?? this.setupMode, cur?.event ?? null);
         break;
@@ -1074,6 +1282,7 @@ class Game {
         this.pauseBtn.classList.remove('show');
         break;
       case 'quit':
+        if (this.battle) { this.endBattle(); this.startAttract(); this.show('battle'); this.pauseBtn.classList.remove('show'); this.touchHint.classList.remove('show'); break; }
         if (this.puzzle) { this.endPuzzle(); this.startAttract(); this.show('puzzles'); this.pauseBtn.classList.remove('show'); this.touchHint.classList.remove('show'); break; }
         this.startAttract();
         this.show('main');
@@ -1139,7 +1348,7 @@ const TILE_COLORS: Record<string, string> = {
 };
 
 function drawLevel(c: HTMLCanvasElement, id: string): void {
-  const lv = LEVELS.find((l) => l.id === id);
+  const lv = LEVELS.find((l) => l.id === id) ?? ARENAS.find((l) => l.id === id);
   const ctx = c.getContext('2d');
   if (!lv || !ctx) return;
   const rows = lv.map.length, cols = lv.map[0].length;

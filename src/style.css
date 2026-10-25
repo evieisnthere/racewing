@@ -361,8 +361,16 @@ input[type='range'] { padding: 0; accent-color: var(--cyan); }
 .level canvas { width: 100%; height: auto; aspect-ratio: 200 / 110; background: rgba(0, 0, 0, 0.35); border-radius: 8px; }
 .level b { font: 600 15px var(--display); color: var(--c); }
 .level small { color: var(--dim); font-size: 14px; line-height: 1.25; }
-.level em { font-style: normal; font-size: 14px; }
+.level em { font-style: normal; font-size: 14px; color: var(--dim); }
 .level:disabled { opacity: 0.4; cursor: not-allowed; }
+.level.sel { border-color: var(--c); box-shadow: 0 0 18px color-mix(in srgb, var(--c) 45%, transparent); background: color-mix(in srgb, var(--c) 10%, transparent); }
+.hud-board { margin-top: 8px; display: flex; flex-direction: column; gap: 3px; font: 600 13px var(--display); }
+.hud-board .b-row { display: flex; align-items: center; gap: 6px; opacity: 0.85; }
+.hud-board .b-row i { width: 9px; height: 9px; border-radius: 50%; }
+.hud-board .b-row span { color: #ff5f8f; letter-spacing: 1px; }
+.hud-board .b-row.me { opacity: 1; color: var(--racer); }
+.hud-board .b-row.out { opacity: 0.35; text-decoration: line-through; }
+.hud.compact .hud-board { font-size: 11px; }
 .medal-big { display: inline-block; width: 46px; height: 46px; border-radius: 50%; margin: 6px; }
 .medal-big.b { background: #d08a4a; } .medal-big.s { background: #cfd8e3; } .medal-big.g { background: #ffd23d; box-shadow: 0 0 20px #ffd23d; }
 .medal-big.none { border: 3px dashed rgba(255, 255, 255, 0.25); }

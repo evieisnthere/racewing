@@ -92,10 +92,24 @@ export function makeShip(x: number, y: number, angle: number, idx: number): Ship
   };
 }
 
-/** Two-button mapping. 'thrust': always thrust, single button turns, both brakes then reverses. 'classic': single turns while coasting, both thrusts. */
-export type Scheme = 'thrust' | 'classic';
+/**
+ * Control schemes.
+ * 'manual': W/up thrusts, S/down brakes then reverses, left/right turn. On touch (no thrust key) holding
+ *   both sides thrusts, like 'classic'.
+ * 'thrust': always thrusting; one button turns, both brake then reverse.
+ * 'classic': one button turns while coasting, both thrust.
+ */
+export type Scheme = 'manual' | 'thrust' | 'classic';
 
-export function intentFrom(left: boolean, right: boolean, scheme: Scheme): Intent {
+export function intentFrom(b: { left: boolean; right: boolean; thrust?: boolean; brake?: boolean }, scheme: Scheme): Intent {
+  const { left, right } = b;
+  if (scheme === 'manual') {
+    const both = left && right;
+    const turn = both ? 0 : left ? -1 : right ? 1 : 0;
+    if (b.brake) return { turn, throttle: -1 };
+    if (b.thrust || both) return { turn, throttle: 1 };
+    return { turn, throttle: 0 };
+  }
   if (scheme === 'classic') {
     if (left && right) return { turn: 0, throttle: 1 };
     return { turn: left ? -1 : right ? 1 : 0, throttle: 0 };

@@ -119,7 +119,7 @@ export const NODES: CampaignNode[] = [
   },
   // ---------------- Pro ----------------
   {
-    id: 'p1', kind: 'race', track: 'well', laps: 3, col: 5, row: 1, requires: ['r5'], gate: 8,
+    id: 'p1', kind: 'race', track: 'well', laps: 3, col: 5, row: 1, requires: ['r5'], gate: 6,
     field: f(['rook', 'hard'], ['kite', 'medium'], ['vex', 'medium'], ['dune', 'medium'], ['pip', 'easy']),
     brief: 'Welcome to the Pro Circuit. The central well never lets go.',
     pre: L(
@@ -170,7 +170,7 @@ export const NODES: CampaignNode[] = [
   },
   // ---------------- Elite ----------------
   {
-    id: 'e1', kind: 'race', track: 'undertow', laps: 3, col: 9, row: 1, requires: ['p6'], gate: 22,
+    id: 'e1', kind: 'race', track: 'undertow', laps: 3, col: 9, row: 1, requires: ['p6'], gate: 16,
     field: f(['halo', 'insane'], ['rook', 'hard'], ['vex', 'hard'], ['nova', 'hard'], ['kite', 'medium']),
     brief: 'The Elite League starts in the currents.',
     pre: L(
@@ -219,7 +219,7 @@ export const NODES: CampaignNode[] = [
   },
   // ---------------- Championship ----------------
   {
-    id: 'c1', kind: 'race', track: 'canyon', laps: 3, col: 13, row: 1, requires: ['e6'], gate: 38,
+    id: 'c1', kind: 'race', track: 'canyon', laps: 3, col: 13, row: 1, requires: ['e6'], gate: 30,
     field: f(['sable', 'insane'], ['halo', 'insane'], ['rook', 'hard'], ['vex', 'hard'], ['nova', 'hard']),
     brief: 'Championship round one. The canyon again, against the best.',
     pre: L(

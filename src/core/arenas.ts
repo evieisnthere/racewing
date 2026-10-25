@@ -1,0 +1,60 @@
+import type { LevelDef } from './level';
+
+// Snake Battle arenas (see level.ts for the legend). Shove rivals into the pits; last ship flying wins.
+export const ARENAS: LevelDef[] = [
+  {
+    id: 'A1', name: 'Pit Ring', color: 0xff3df2, route: [],
+    blurb: 'An open floor ringed by a drop, with a pit in the middle. Simple and brutal.',
+    map: [
+      '######################',
+      '#~~~~~~~~~~~~~~~~~~~~#',
+      '#~1................2~#',
+      '#~..................~#',
+      '#~..................~#',
+      '#~.......~~~~.......~#',
+      '#~3......~~~~......4~#',
+      '#~.......~~~~.......~#',
+      '#~..................~#',
+      '#~..................~#',
+      '#~5................6~#',
+      '#~~~~~~~~~~~~~~~~~~~~#',
+      '######################',
+    ],
+  },
+  {
+    id: 'A2', name: 'Spinner Hall', color: 0xff7a3d, route: [],
+    blurb: 'Spinning bars sweep the floor between pit islands. Use them to batter rivals off the edge.',
+    map: [
+      '########################',
+      '#1.........~~.........2#',
+      '#..........~~..........#',
+      '#....R..........R......#',
+      '#......................#',
+      '#~~~......~~~~......~~~#',
+      '#3........~~~~........4#',
+      '#~~~......~~~~......~~~#',
+      '#......................#',
+      '#....R..........R......#',
+      '#..........~~..........#',
+      '#5.........~~.........6#',
+      '########################',
+    ],
+  },
+  {
+    id: 'A3', name: 'Ice Rink', color: 0x9fe8ff, route: [],
+    blurb: 'A frictionless rink over the void, holed through. Every shove keeps sliding.',
+    map: [
+      '######################',
+      '#~~~~~~~~~~~~~~~~~~~~#',
+      '#~1iiiiiiiiiiiiiiii2~#',
+      '#~iiii~~iiiiii~~iiii~#',
+      '#~iiii~~ii..ii~~iiii~#',
+      '#~3iiiiii.OO.iiiiii4~#',
+      '#~iiii~~ii..ii~~iiii~#',
+      '#~iiii~~iiiiii~~iiii~#',
+      '#~5iiiiiiiiiiiiiiii6~#',
+      '#~~~~~~~~~~~~~~~~~~~~#',
+      '######################',
+    ],
+  },
+];

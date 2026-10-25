@@ -15,6 +15,7 @@ export const TILE = 48;
  *   O attractor well   X repulsor
  *   p/q, u/y  one-way portals (enter p, exit q)
  *   R spinning bar   H bar sliding horizontally   V bar sliding vertically
+ *   1-6  battle spawn points
  */
 export interface LevelDef {
   id: string;
@@ -50,6 +51,8 @@ export class Level extends Course {
   readonly lowTiles: [number, number][] = [];
   readonly floor: [number, number][] = [];
   start = { x: 0, y: 0, angle: 0 };
+  /** Battle spawn points ('1'-'6'). */
+  readonly spawns: { x: number; y: number }[] = [];
   goal = { x: 0, y: 0, r: 26 };
   /** Barriers flip state each time a switch is hit. */
   toggled = false;
@@ -73,6 +76,7 @@ export class Level extends Course {
         const rect = (x0 = c * TILE, y0 = r * TILE, w = TILE, h = TILE) => region([x0, y0, x0 + w, y0, x0 + w, y0 + h, x0, y0 + h]);
         switch (ch) {
           case 'S': this.start = { x, y, angle: ang }; break;
+          case '1': case '2': case '3': case '4': case '5': case '6': this.spawns[Number(ch) - 1] = { x, y }; break;
           case 'G': this.goal = { x, y, r: 26 }; break;
           case '+': this.checkpoints.push({ x, y, angle: 0, reached: false }); break;
           case 'a': case 'b': case 'c': this.keys.push({ x, y, id: ch, taken: false }); break;

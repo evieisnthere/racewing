@@ -118,7 +118,7 @@ export class PuzzleRun {
     }
     r.left = b.left; r.right = b.right;
     const wasFalling = s.fall > 0;
-    stepShip(s, intentFrom(b.left, b.right, this.scheme), lv, dt);
+    stepShip(s, intentFrom(b, this.scheme), lv, dt);
     if (!wasFalling && s.fall > 0) { this.falls++; this.events.push({ type: 'fall' }); }
     if (wasFalling && s.fall <= 0 && this.autopilot) this.autopilot.resync(s.x, s.y, false);
     if (s.fall > 0 || this.state === 'finished') return;

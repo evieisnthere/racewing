@@ -2,6 +2,8 @@ import { Bot, type Tier } from './ai';
 import { GhostRecorder, type Ghost } from './ghost';
 import { collideShips, inFlip, intentFrom, makeShip, stepShip, type Scheme, type Ship } from './physics';
 import { Track } from './track';
+import { collectOrb, grow, makeTail, placeOrbs, shed, stepTail, tailDrag, tailHits, tickOrbs, type Tail } from './snake';
+import { mulberry32 } from './math';
 
 export interface RacerSpec {
   name: string;
@@ -26,6 +28,8 @@ export interface RaceConfig {
   collisions: boolean;
   /** Last place is knocked out each time the leader starts a new lap; runs until one ship remains. */
   elimination?: boolean;
+  /** Snake tails: every ship drags a physical tail that shoves others; orbs on track grow it. */
+  snake?: boolean;
   seed?: number;
 }
 
@@ -33,9 +37,12 @@ export type RaceEvent =
   | { type: 'lap'; racer: Racer; lap: number; time: number; best: boolean; ghost: Ghost | null }
   | { type: 'finish'; racer: Racer; place: number }
   | { type: 'out'; racer: Racer; place: number }
-  | { type: 'go' };
+  | { type: 'go' }
+  | { type: 'orb'; racer: Racer }
+  | { type: 'whip'; racer: Racer; target: Racer; power: number };
 
-export interface Buttons { left: boolean; right: boolean }
+/** A player's inputs: two steering buttons, plus optional thrust/brake keys for the 'manual' scheme. */
+export interface Buttons { left: boolean; right: boolean; thrust?: boolean; brake?: boolean }
 
 export class Racer {
   readonly ship: Ship;
@@ -49,6 +56,8 @@ export class Racer {
   /** Knocked out in an elimination race. */
   out = false;
   outTime = Infinity;
+  /** Seconds of respawn protection left (Snake Battle): can't be shoved or collided with. */
+  shield = 0;
   place = 0;
   readonly bot: Bot | null;
   /** Takes over a human's ship after they finish. */
@@ -56,6 +65,11 @@ export class Racer {
   readonly recorder: GhostRecorder | null;
   left = false;
   right = false;
+  tail: Tail | null = null;
+  /** Bot tail flick: seconds left and direction (-1 left, 1 right). */
+  flick = 0;
+  flickDir = 0;
+  flickCd = 0;
 
   constructor(readonly spec: RacerSpec, ship: Ship, seed: number) {
     this.ship = ship;
@@ -96,6 +110,16 @@ export class Race {
       this.racers.push(new Racer(spec, makeShip(x, y, angle, idx), seed * 101 + i * 7919));
     });
     this.rank();
+    if (config.snake) {
+      for (const r of this.racers) r.tail = makeTail(r.ship);
+      const rand = mulberry32(seed * 31 + 7);
+      const pts: [number, number][] = [];
+      for (let i = 40; i < t.n - 20; i += 7) {
+        const off = (rand() - 0.5) * 1.4 * t.hw[i];
+        pts.push([t.cx[i] + t.nx[i] * off, t.cy[i] + t.ny[i] * off]);
+      }
+      placeOrbs(t, pts, Math.round(t.length / 300), rand);
+    }
   }
 
   get humans(): Racer[] { return this.racers.filter((r) => r.human); }
@@ -121,15 +145,33 @@ export class Race {
       let b: Buttons;
       if (r.autopilot || r.bot) {
         b = (r.autopilot ?? r.bot)!.think(r.ship, t, dt, this.time);
+        if (r.tail && r.bot) b = this.botFlick(r, b, dt);
         // Bots know about flip zones and pre-swap their inputs.
         if (inFlip(r.ship, t)) b = { left: b.right, right: b.left };
       } else b = input[r.spec.slot ?? 0] ?? { left: false, right: false };
       r.left = b.left; r.right = b.right;
       const scheme = r.human && !r.autopilot ? this.config.scheme : 'thrust';
       const prev = r.ship.idx;
-      stepShip(r.ship, intentFrom(b.left, b.right, scheme), t, dt);
+      stepShip(r.ship, intentFrom(b, scheme), t, dt);
       this.trackLaps(r, prev);
       if (r.recorder && !r.finished) r.recorder.sample(r.ship, this.time - r.lapStart);
+      if (r.tail) {
+        stepTail(r.tail, r.ship, t, dt);
+        tailDrag(r.tail, r.ship, dt);
+        if (collectOrb(t, r.ship)) { grow(r.tail, r.ship); this.events.push({ type: 'orb', racer: r }); }
+        if (r.ship.hit > 200) shed(r.tail);
+      }
+    }
+    if (this.config.snake) {
+      tickOrbs(t, dt);
+      for (const a of this.racers) {
+        if (!a.tail || a.out) continue;
+        for (const b of this.racers) {
+          if (a === b || b.out) continue;
+          const power = tailHits(a.tail, b.ship, dt);
+          if (power > 90) this.events.push({ type: 'whip', racer: a, target: b, power });
+        }
+      }
     }
     if (this.config.collisions) {
       const live = this.racers.filter((r) => !r.out && r.ship.fall <= 0 && r.ship.air <= 0);
@@ -173,6 +215,33 @@ export class Race {
     } else if (prev < n * 0.25 && idx > n * 0.75) {
       r.lap--;
     }
+  }
+
+  /** A bot with a tail snaps its nose toward a rival alongside, swinging the tail into them. */
+  private botFlick(r: Racer, b: Buttons, dt: number): Buttons {
+    r.flickCd -= dt;
+    if (r.flick > 0) {
+      r.flick -= dt;
+      return { left: r.flickDir < 0, right: r.flickDir > 0 };
+    }
+    if (r.flickCd > 0) return b;
+    const s = r.ship;
+    const hx = Math.cos(s.angle), hy = Math.sin(s.angle);
+    for (const o of this.racers) {
+      if (o === r || o.out || o.ship.fall > 0) continue;
+      const dx = o.ship.x - s.x, dy = o.ship.y - s.y;
+      const d = Math.hypot(dx, dy);
+      if (d > 48 || d < 8) continue;
+      const along = (dx * hx + dy * hy) / d;
+      if (along > 0.2) continue; // only rivals beside or behind
+      const side = Math.sign(hx * dy - hy * dx) || 1;
+      // Turning away from the rival swings the tail toward them.
+      r.flickDir = -side;
+      r.flick = 0.16 + (r.bot!.skill.lineBlend * 0.08);
+      r.flickCd = 1.4 - r.bot!.skill.lineBlend * 0.6;
+      return { left: r.flickDir < 0, right: r.flickDir > 0 };
+    }
+    return b;
   }
 
   private eliminate(): void {

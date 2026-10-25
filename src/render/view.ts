@@ -192,6 +192,7 @@ export class View {
   private gimmicks: GimmickLayer;
   private ships: ShipSprite[] = [];
   private trails: { pts: number[]; g: Graphics }[] = [];
+  private tails = new Graphics();
   private ghost: ShipSprite;
   private sparkLayer = new Container();
   private sparks: Spark[] = [];
@@ -231,6 +232,7 @@ export class View {
     this.ghost = new ShipSprite(hullById(follow.spec.hull ?? 'dart'), 0xffffff, 0.35);
     this.ghost.visible = false;
     this.world.addChild(this.ghost);
+    this.world.addChild(this.tails);
     for (const r of race.racers) {
       const g = new Graphics();
       trailLayer.addChild(g);
@@ -286,6 +288,25 @@ export class View {
     this.minimap.addChild(g, this.miniDots);
   }
 
+  /** Snake tails: tapered beads from the ship back to the tip, brighter where the tail is swinging fast. */
+  private drawTails(): void {
+    const g = this.tails.clear();
+    for (const r of this.race.racers) {
+      const t = r.tail;
+      if (!t || r.out || r.ship.fall > 0) continue;
+      const c = r.spec.color;
+      g.moveTo(t.xs[0], t.ys[0]);
+      for (let k = 1; k < t.n; k++) g.lineTo(t.xs[k], t.ys[k]);
+      g.stroke({ width: 2, color: c, alpha: 0.5, cap: 'round', join: 'round' });
+      for (let k = 1; k < t.n; k++) {
+        const f = 1 - k / t.n;
+        const sp = Math.hypot(t.xs[k] - t.pxs[k], t.ys[k] - t.pys[k]) * 240;
+        const hot = Math.min(1, sp / 400);
+        g.circle(t.xs[k], t.ys[k], 1.6 + f * 3).fill({ color: hot > 0.5 ? 0xffffff : c, alpha: 0.55 + hot * 0.45 });
+      }
+    }
+  }
+
   layout(x: number, y: number, w: number, h: number): void {
     this.root.position.set(x, y);
     this.w = w; this.h = h;
@@ -315,7 +336,7 @@ export class View {
       const airF = s.air > 0 && s.airMax > 0 ? Math.sin(Math.PI * (1 - s.air / s.airMax)) : 0;
       const fallF = s.fall > 0 ? s.fall / PHYS.fallTime : 1;
       sp.scale.set((1 + airF * 0.7) * fallF);
-      sp.alpha = s.fall > 0 ? fallF : 1;
+      sp.alpha = s.fall > 0 ? fallF : r.shield > 0 ? 0.35 + 0.4 * (Math.sin(time * 30) > 0 ? 1 : 0) : 1;
       sp.shadow(airF);
       sp.flame(s.throttle > 0 || s.scrape > 0, 0.6 + Math.random() * 0.5 + (s.boost > 0 || s.scrape > 0 ? 0.8 : 0),
         s.boost > 0 ? 0xffe14d : s.scrape > 0 ? 0xff7a3d : r.spec.color);
@@ -391,6 +412,8 @@ export class View {
         }
       }
     });
+
+    this.drawTails();
 
     const gp = this.ghostPose();
     this.ghost.visible = !!gp;

@@ -80,7 +80,9 @@ export function focusNode(p: Progress): CampaignNode {
 }
 export const nodeX = (n: CampaignNode) => PAD + n.col * COLW + COLW / 2;
 
-export function renderBrief(n: CampaignNode, p: Progress, name: string): string {
+export function renderBrief(n: CampaignNode, p: Progress, name: string, assist = 0): string {
+  const TIERS = ['easy', 'medium', 'hard', 'insane'] as const;
+  const shift = (t: (typeof TIERS)[number]) => TIERS[Math.max(0, Math.min(3, TIERS.indexOf(t) + assist))];
   const t = getTrack(n.track);
   const st = nodeState(p, n);
   let goal: string;
@@ -95,7 +97,7 @@ export function renderBrief(n: CampaignNode, p: Progress, name: string): string 
   const rival = n.boss ? char(n.boss) : null;
   const lineup = n.field.map((o) => {
     const c = char(o.who);
-    return `<div class="pilot" style="--c:${hex(c.color)}">${portrait(c, 40)}<div><b>${esc(c.name)}</b><small>${esc(c.title)} · ${TIER_NAMES[o.tier]}</small></div></div>`;
+    return `<div class="pilot" style="--c:${hex(c.color)}">${portrait(c, 40)}<div><b>${esc(c.name)}</b><small>${esc(c.title)} · ${TIER_NAMES[shift(o.tier)]}</small></div></div>`;
   }).join('');
   return `
     <h2>${n.kind === 'exhibition' ? 'Season opener' : rival ? `Showdown: ${esc(rival.name)}` : KIND_LABEL[n.kind]}</h2>
