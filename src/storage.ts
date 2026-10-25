@@ -62,6 +62,15 @@ export function saveProgress(p: Record<string, number>): void {
   set('campaign', JSON.stringify(p));
 }
 
+/** Best clear time per puzzle level id. */
+export function loadPuzzleBests(): Record<string, number> {
+  try { return JSON.parse(get('puzzle') ?? '{}'); } catch { return {}; }
+}
+
+export function savePuzzleBests(b: Record<string, number>): void {
+  set('puzzle', JSON.stringify(b));
+}
+
 /** Dialogue keys already shown ("x0:pre", "r5:win", ...). */
 export function loadSeen(): Set<string> {
   try { return new Set(JSON.parse(get('story') ?? '[]')); } catch { return new Set(); }

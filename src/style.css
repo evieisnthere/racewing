@@ -351,3 +351,19 @@ input[type='range'] { padding: 0; accent-color: var(--cyan); }
 .gen-seed button { flex: none; padding: 6px 12px; }
 #menu.busy { cursor: progress; }
 #menu.busy .panel { opacity: 0.6; pointer-events: none; }
+
+/* ---------- puzzles ---------- */
+.hud-keys { display: flex; gap: 8px; margin-top: 8px; }
+.hud-keys .key { width: 18px; height: 18px; transform: rotate(45deg); border: 2px solid var(--k); opacity: 0.45; }
+.hud-keys .key.got { background: var(--k); opacity: 1; box-shadow: 0 0 12px var(--k); }
+.levels { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+.level { display: flex; flex-direction: column; gap: 4px; text-align: left; padding: 10px; border-color: color-mix(in srgb, var(--c) 40%, transparent); }
+.level canvas { width: 100%; height: auto; aspect-ratio: 200 / 110; background: rgba(0, 0, 0, 0.35); border-radius: 8px; }
+.level b { font: 600 15px var(--display); color: var(--c); }
+.level small { color: var(--dim); font-size: 14px; line-height: 1.25; }
+.level em { font-style: normal; font-size: 14px; }
+.level:disabled { opacity: 0.4; cursor: not-allowed; }
+.medal-big { display: inline-block; width: 46px; height: 46px; border-radius: 50%; margin: 6px; }
+.medal-big.b { background: #d08a4a; } .medal-big.s { background: #cfd8e3; } .medal-big.g { background: #ffd23d; box-shadow: 0 0 20px #ffd23d; }
+.medal-big.none { border: 3px dashed rgba(255, 255, 255, 0.25); }
+.results-time { font: 900 34px var(--display); color: var(--text); margin: 4px 0; }

@@ -39,7 +39,13 @@ export interface TrackDef {
 export interface Zone { i0: number; i1: number; angle: number; strength: number }
 export interface Pad { i0: number; i1: number; lat: number; halfWidth: number }
 
-export const SPACING = 16;
+export const SPACING = 10;
+/**
+ * Track definitions are authored at a larger scale; everything is shrunk to Data Wing proportions on load
+ * (tracks ~4-5 ships wide). Positions and lengths use WORLD, track widths use WIDTH.
+ */
+export const WORLD = 0.5;
+export const WIDTH = 0.55;
 
 function hash(s: string): number {
   let h = 2166136261;
@@ -105,8 +111,8 @@ export class Track extends Course {
     this.def = def;
     this.key = def.id + '@' + hash(JSON.stringify(def)).toString(36);
     const raw: number[][] = [];
-    const sc = def.scale ?? 1;
-    const P = def.points.map((p) => [p[0] * sc, p[1] * sc, p[2] ?? def.width]);
+    const sc = (def.scale ?? 1) * WORLD;
+    const P = def.points.map((p) => [p[0] * sc, p[1] * sc, (p[2] ?? def.width) * WIDTH]);
     const m = P.length;
     const steps = 48;
     const tmp = [0, 0];
@@ -171,7 +177,7 @@ export class Track extends Course {
       this.ry[i] = this.cy[i] + this.ny[i] * this.hw[i];
     }
     this.buildSegments();
-    this.lineOff = this.buildRacingLine(16);
+    this.lineOff = this.buildRacingLine(9);
     const lx = alloc(), ly = alloc();
     for (let i = 0; i < n; i++) {
       lx[i] = this.cx[i] + this.nx[i] * this.lineOff[i];
@@ -189,14 +195,14 @@ export class Track extends Course {
       this.wells.push({
         x: w.x !== undefined ? w.x * sc : this.cx[i] + this.nx[i] * this.hw[i] * w.offset,
         y: w.y !== undefined ? w.y * sc : this.cy[i] + this.ny[i] * this.hw[i] * w.offset,
-        radius: w.radius,
+        radius: w.radius * WORLD,
         strength: w.strength,
       });
     }
     for (const p of def.pads ?? []) {
       const i0 = idx(p.at);
-      const len = Math.max(1, Math.round((p.length ?? 128) / SPACING));
-      this.pads.push({ i0, i1: (i0 + len) % n, lat: p.offset * this.hw[i0], halfWidth: (p.width ?? 56) / 2 });
+      const len = Math.max(1, Math.round(((p.length ?? 128) * WORLD) / SPACING));
+      this.pads.push({ i0, i1: (i0 + len) % n, lat: p.offset * this.hw[i0], halfWidth: ((p.width ?? 56) * WORLD) / 2 });
     }
     this.buildGimmicks(idx);
   }
@@ -221,15 +227,15 @@ export class Track extends Course {
     for (const p of def.portals ?? []) {
       const a = idx(p.from), b = idx(p.to);
       const [ax, ay] = at(a, p.offset ?? 0), [bx, by] = at(b, p.toOffset ?? p.offset ?? 0);
-      this.portals.push({ ax, ay, aAngle: ang(a), bx, by, bAngle: ang(b), r: p.radius ?? 46, twoWay: false, color: 0x5ad1ff });
+      this.portals.push({ ax, ay, aAngle: ang(a), bx, by, bAngle: ang(b), r: (p.radius ?? 46) * 0.6, twoWay: false, color: 0x5ad1ff });
     }
     for (const h of def.hazards ?? []) {
       const i = idx(h.at);
       const [cx, cy] = at(i, h.offset ?? 0);
-      const hz: Hazard = { kind: h.kind, cx, cy, len: h.len ?? this.hw[i] * 1.3, speed: h.speed ?? (h.kind === 'spin' ? 1.4 : 0.35), phase: h.phase ?? 0, arms: h.arms };
+      const hz: Hazard = { kind: h.kind, cx, cy, len: h.len !== undefined ? h.len * WORLD : this.hw[i] * 1.3, speed: h.speed ?? (h.kind === 'spin' ? 1.4 : 0.35), phase: h.phase ?? 0, arms: h.arms };
       if (h.kind === 'slide') {
         // Slides across the track; the bar lies along the track direction.
-        hz.ux = this.nx[i]; hz.uy = this.ny[i]; hz.amp = this.hw[i] * 0.55; hz.len = h.len ?? 90;
+        hz.ux = this.nx[i]; hz.uy = this.ny[i]; hz.amp = this.hw[i] * 0.55; hz.len = (h.len ?? 90) * WORLD;
       }
       this.hazards.push(hz);
     }
@@ -241,7 +247,7 @@ export class Track extends Course {
       const i0 = idx(j.at);
       const i1 = this.wrap(i0 + 4);
       const p0 = this.wrap(i1 + 3);
-      const p1 = this.wrap(p0 + Math.round((j.gap ?? 170) / SPACING));
+      const p1 = this.wrap(p0 + Math.round(((j.gap ?? 170) * WORLD) / SPACING));
       this.ramps.push({ ...region(this.spanPoly(i0, i1)), dx: this.tx[i0], dy: this.ty[i0] });
       this.pits.push(region(this.spanPoly(p0, p1, -1.05, 1.05)));
       this.pitSpans.push([i0, p1]);
@@ -309,10 +315,10 @@ export class Track extends Course {
   }
 
   /** Pairs of far-apart samples whose walls come too close (overlapping or touching track sections). */
-  clearanceIssues(gap = 60): { i: number; j: number; d: number }[] {
+  clearanceIssues(gap = 30): { i: number; j: number; d: number }[] {
     const out: { i: number; j: number; d: number }[] = [];
     const n = this.n;
-    const skip = Math.ceil(900 / SPACING);
+    const skip = Math.ceil(450 / SPACING);
     for (let i = 0; i < n; i += 2) {
       for (let j = i + skip; j < n; j += 2) {
         if (n - (j - i) < skip) continue;

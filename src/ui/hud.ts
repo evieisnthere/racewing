@@ -100,7 +100,7 @@ export class Hud {
       this.delta.className = 'hud-delta ' + (ghostDelta > 0 ? 'slow' : 'fast');
     }
     const sp = Math.hypot(r.ship.vx, r.ship.vy);
-    this.speed.style.width = Math.min(100, (sp / 950) * 100).toFixed(1) + '%';
+    this.speed.style.width = Math.min(100, (sp / 450) * 100).toFixed(1) + '%';
     this.speed.classList.toggle('boost', r.ship.scrape > 0 || r.ship.boost > 0);
 
     if (race.time < 0) {

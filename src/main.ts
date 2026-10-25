@@ -16,10 +16,15 @@ import { getTrack, isGenerated, registerTrack, TRACK_DEFS } from './core/tracks'
 import { Input } from './input';
 import { View } from './render/view';
 import {
-  bestLap, clearAll, ghostCode, loadProgress, loadSeen, loadSettings, saveBestLap, saveGhostCode, saveProgress, saveSeen, saveSettings,
+  bestLap, clearAll, ghostCode, loadProgress, loadPuzzleBests, savePuzzleBests, loadSeen, loadSettings, saveBestLap, saveGhostCode, saveProgress, saveSeen, saveSettings,
 } from './storage';
 import { focusNode, nodeX, stars, renderBrief, renderCallsign, renderDialogue, renderHangar, renderMap } from './ui/campaignView';
+import { Level, type LevelDef } from './core/level';
+import { LEVELS } from './core/levels';
+import { PuzzleRun, puzzleTargets, RouteBot } from './core/puzzle';
+import { LevelLayer } from './render/levelLayer';
 import { Hud } from './ui/hud';
+import { PuzzleHud } from './ui/puzzleHud';
 import { portrait } from './ui/portrait';
 
 type Mode = 'race' | 'tt' | 'split' | 'attract' | 'campaign';
@@ -44,6 +49,23 @@ interface Session {
   finalLap: boolean;
   radio: RadioState[];
 }
+
+interface PuzzleSession {
+  def: LevelDef;
+  run: PuzzleRun;
+  view: View;
+  hud: PuzzleHud;
+  targets: [number, number, number];
+  paused: boolean;
+  acc: number;
+  resultsShown: boolean;
+  /** Best time before this run (for "new best"). */
+  prevBest: number;
+}
+
+const medalOf = (t: number, targets: [number, number, number]) => (t <= targets[2] ? 3 : t <= targets[1] ? 2 : t <= targets[0] ? 1 : 0);
+const MEDAL_CLASS = ['none', 'b', 's', 'g'];
+const MEDAL_NAME = ['No medal', 'Bronze', 'Silver', 'Gold'];
 
 interface RadioState {
   last: number;
@@ -73,6 +95,9 @@ class Game {
   private settings = loadSettings();
   private progress = loadProgress();
   private session: Session | null = null;
+  private puzzle: PuzzleSession | null = null;
+  private puzzleId = 'L1';
+  private puzzleBests = loadPuzzleBests();
   private menu = document.getElementById('menu') as HTMLDivElement;
   private hudLayer = document.getElementById('hud') as HTMLDivElement;
   private touchHint = document.getElementById('touch') as HTMLDivElement;
@@ -200,7 +225,79 @@ class Game {
     if (racing) this.hide();
   }
 
+  private startPuzzle(def: LevelDef): void {
+    this.end();
+    const run = new PuzzleRun(new Level(def), { name: this.settings.callsign || this.settings.name, color: this.settings.color, hull: this.settings.hull, kind: 'human', slot: 0 }, this.settings.scheme);
+    if (AUTOPILOT) run.autopilot = new RouteBot(def.route);
+    const view = new View(run, run.me, () => null, new LevelLayer(run.course));
+    this.app.stage.addChild(view.root);
+    const targets = puzzleTargets(def);
+    const hud = new PuzzleHud(this.hudLayer, run, targets, def.color);
+    this.puzzle = { def, run, view, hud, targets, paused: false, acc: 0, resultsShown: false, prevBest: this.puzzleBests[def.id] ?? Infinity };
+    this.input.clear();
+    this.layout();
+    sound.setEngines(1);
+    sound.setIntensity(0.6);
+    this.pauseBtn.classList.toggle('show', coarse);
+    this.touchHint.classList.toggle('show', coarse);
+    this.hide();
+  }
+
+  private endPuzzle(): void {
+    const p = this.puzzle;
+    if (!p) return;
+    p.view.destroy();
+    p.hud.destroy();
+    this.puzzle = null;
+  }
+
+  private puzzleFrame(dt: number): void {
+    const p = this.puzzle!;
+    const run = p.run;
+    if (!p.paused) {
+      p.acc += dt;
+      let steps = 0;
+      while (p.acc >= STEP && steps < 60) {
+        run.step(this.input.read(1));
+        p.acc -= STEP;
+        steps++;
+      }
+      for (const ev of run.events) {
+        if (ev.type === 'go') sound.countdown(true);
+        else if (ev.type === 'key') { p.hud.flash('KEY', 'best'); sound.chime('best'); this.buzz(30); }
+        else if (ev.type === 'switch') { p.hud.flash(run.course.toggled ? 'SWITCH ON' : 'SWITCH OFF'); sound.chime('lap'); }
+        else if (ev.type === 'checkpoint') { p.hud.flash('CHECKPOINT'); sound.chime('lap'); }
+        else if (ev.type === 'fall') { sound.chime('out'); this.buzz(60); }
+        else if (ev.type === 'goal') { p.hud.flash('GOAL!', 'record'); sound.chime('finish'); this.buzz([40, 60, 40]); }
+      }
+      run.events.length = 0;
+    }
+    const sh = run.me.ship;
+    if (run.time < 0) {
+      const c = Math.ceil(-run.time);
+      if (c !== this.lastPuzzleCount && c <= 3) sound.countdown(false);
+      this.lastPuzzleCount = c;
+    }
+    sound.updateEngine(0, Math.hypot(sh.vx, sh.vy), p.paused ? 0 : sh.throttle, sh.scrape > 0 && !p.paused, !p.paused);
+    if (sh.hit > 120) sound.hit(sh.hit);
+    p.view.update(p.paused ? 0 : dt);
+    p.hud.update(dt);
+    if (coarse && run.time > 3) this.touchHint.classList.remove('show');
+    if (run.state === 'finished' && !p.resultsShown && run.time - run.finishedAt > 1.5) {
+      p.resultsShown = true;
+      sound.setIntensity(0.3);
+      if (!AUTOPILOT && run.finishedAt < (this.puzzleBests[p.def.id] ?? Infinity)) {
+        this.puzzleBests[p.def.id] = run.finishedAt;
+        savePuzzleBests(this.puzzleBests);
+      }
+      this.show('presults');
+    }
+  }
+
+  private lastPuzzleCount = 99;
+
   private end(): void {
+    this.endPuzzle();
     const s = this.session;
     if (!s) return;
     for (const v of s.views) v.destroy();
@@ -228,9 +325,14 @@ class Game {
   }
 
   private layout(): void {
+    const w = this.app.screen.width, h = this.app.screen.height;
+    if (this.puzzle) {
+      this.puzzle.view.layout(0, 0, w, h);
+      this.puzzle.hud.layout(w, h);
+      return;
+    }
     const s = this.session;
     if (!s) return;
-    const w = this.app.screen.width, h = this.app.screen.height;
     const rects: [number, number, number, number][] = s.views.length === 1
       ? [[0, 0, w, h]]
       : w > h * 1.1
@@ -241,6 +343,7 @@ class Game {
   }
 
   private frame(dt: number): void {
+    if (this.puzzle) { this.puzzleFrame(dt); return; }
     const s = this.session;
     if (!s) return;
     const race = s.race;
@@ -286,7 +389,7 @@ class Game {
     race.humans.forEach((r, i) => {
       const sh = r.ship;
       sound.updateEngine(i, Math.hypot(sh.vx, sh.vy), s.paused ? 0 : sh.throttle, sh.scrape > 0 && !s.paused, !s.paused && !r.out);
-      if (sh.hit > 250) { sound.hit(sh.hit); this.buzz(Math.min(70, Math.round(sh.hit / 8))); }
+      if (sh.hit > 120) { sound.hit(sh.hit); this.buzz(Math.min(70, Math.round(sh.hit / 4))); }
       if (sh.boost > s.boost[i]) sound.pad();
       s.boost[i] = sh.boost;
     });
@@ -324,7 +427,7 @@ class Game {
         this.say(s, i, 'wren', pick(WREN.final));
         return;
       }
-      if (sh.hit > 320 && st.hitTips < 3 && race.time - st.lastHitTip > 15 && free) {
+      if (sh.hit > 160 && st.hitTips < 3 && race.time - st.lastHitTip > 15 && free) {
         st.hitTips++;
         st.lastHitTip = race.time;
         this.say(s, i, 'wren', pick(WREN.hit));
@@ -440,6 +543,13 @@ class Game {
   }
 
   private togglePause(): void {
+    const p = this.puzzle;
+    if (p) {
+      if (p.resultsShown) return;
+      p.paused = !p.paused;
+      if (p.paused) this.show('pause'); else this.hide();
+      return;
+    }
     const s = this.session;
     if (!s || s.mode === 'attract' || s.resultsShown) return;
     s.paused = !s.paused;
@@ -447,6 +557,12 @@ class Game {
   }
 
   private respawn(slot: number): void {
+    const p = this.puzzle;
+    if (p) {
+      // Back to the last checkpoint.
+      if (!p.paused && p.run.state === 'racing' && p.run.me.ship.fall <= 0) p.run.me.ship.fall = 0.01;
+      return;
+    }
     const s = this.session;
     if (!s || s.paused || s.mode === 'attract' || s.race.state !== 'racing') return;
     const r = s.race.humans[slot];
@@ -469,6 +585,7 @@ class Game {
     this.menu.classList.add('show');
     this.menu.scrollTop = 0;
     for (const c of this.menu.querySelectorAll<HTMLCanvasElement>('canvas[data-preview]')) drawPreview(c, c.dataset.preview!);
+    for (const c of this.menu.querySelectorAll<HTMLCanvasElement>('canvas[data-level]')) drawLevel(c, c.dataset.level!);
     for (const c of this.menu.querySelectorAll<HTMLCanvasElement>('canvas[data-hull]')) drawShip(c, c.dataset.hull!, this.settings.color, 2.2);
     const big = document.getElementById('hangar-ship') as HTMLCanvasElement | null;
     if (big) drawShip(big, this.settings.hull, this.settings.color, 5.5);
@@ -490,6 +607,7 @@ class Game {
             <button data-action="setup" data-mode="race">Quick Race</button>
             <button data-action="setup" data-mode="tt">Time Trial</button>
             <button data-action="setup" data-mode="split">Split-screen</button>
+            <button data-action="go" data-to="puzzles">Puzzles</button>
             <button data-action="go" data-to="gen">Track Generator</button>
             <button data-action="go" data-to="hangar">Hangar</button>
             <button data-action="go" data-to="settings">Settings</button>
@@ -545,6 +663,12 @@ class Game {
             <li><kbd>R</kbd> or gamepad Y resets your ship to the track. <kbd>Esc</kbd>/<kbd>P</kbd> or Start pauses. <kbd>M</kbd> mutes.</li>
           </ul>
           <div class="row"><button class="primary" data-action="go" data-to="main">Back</button></div>`;
+      case 'puzzles':
+        return this.renderPuzzles();
+      case 'pbrief':
+        return this.renderPuzzleBrief();
+      case 'presults':
+        return this.renderPuzzleResults();
       case 'pause':
         return `
           <h2>Paused</h2>
@@ -630,6 +754,67 @@ class Game {
       this.startAttract();
       this.show('gen');
     }, 30);
+  }
+
+  private puzzleUnlocked(i: number): boolean {
+    return i === 0 || LEVELS[i - 1].id in this.puzzleBests;
+  }
+
+  private renderPuzzles(): string {
+    return `
+      <h2>Puzzles</h2>
+      <p class="tag">Reach the goal. Keys open gates, switches flip barriers, ramps jump pits.</p>
+      <div class="levels">${LEVELS.map((lv, i) => {
+        const open = this.puzzleUnlocked(i);
+        const best = this.puzzleBests[lv.id];
+        const medal = best !== undefined ? medalOf(best, puzzleTargets(lv)) : 0;
+        return `<button class="level" data-action="pbrief" data-id="${lv.id}" ${open ? '' : 'disabled'} style="--c:${hex(lv.color)}">
+          <canvas width="200" height="110" data-level="${lv.id}"></canvas>
+          <b>${i + 1}. ${esc(lv.name)}</b>
+          <em>${open ? (best !== undefined ? `${formatTime(best)} · ${MEDAL_NAME[medal]}` : 'Not cleared') : '🔒 Clear the previous level'}</em>
+        </button>`;
+      }).join('')}</div>
+      <div class="row"><button class="primary" data-action="go" data-to="main">Back</button></div>`;
+  }
+
+  private renderPuzzleBrief(): string {
+    const lv = LEVELS.find((l) => l.id === this.puzzleId)!;
+    const [b, sv, g] = puzzleTargets(lv);
+    const best = this.puzzleBests[lv.id];
+    return `
+      <h2>${esc(lv.name)}</h2>
+      <div class="brief-body">
+        <canvas width="320" height="170" data-level="${lv.id}"></canvas>
+        <div>
+          <p>${esc(lv.blurb)}</p>
+          <p class="goal"><span class="medal b"></span>Bronze ${formatTime(b)} <span class="medal s"></span>Silver ${formatTime(sv)} <span class="medal g"></span>Gold ${formatTime(g)}</p>
+          <p>Your best: ${best !== undefined ? `${formatTime(best)} (${MEDAL_NAME[medalOf(best, [b, sv, g])]})` : '—'}</p>
+          <p class="note"><kbd>R</kbd> or gamepad Y returns you to the last checkpoint.</p>
+        </div>
+      </div>
+      <div class="row"><button data-action="go" data-to="puzzles">Levels</button><button class="primary" data-action="pstart">Start</button></div>`;
+  }
+
+  private renderPuzzleResults(): string {
+    const p = this.puzzle!;
+    const t = p.run.finishedAt;
+    const medal = medalOf(t, p.targets);
+    const idx = LEVELS.indexOf(p.def);
+    const next = LEVELS[idx + 1];
+    const newBest = t < p.prevBest;
+    return `
+      <h2>${esc(p.def.name)}</h2>
+      <div class="earned">
+        <span class="medal-big ${MEDAL_CLASS[medal]}"></span>
+        <p class="results-time">${formatTime(t)}</p>
+        <p>${MEDAL_NAME[medal]}${newBest ? ' · <b style="color:#3dff9a">New best!</b>' : ''} · ${p.run.falls} fall${p.run.falls === 1 ? '' : 's'}</p>
+        <p class="note"><span class="medal b"></span>${formatTime(p.targets[0])} <span class="medal s"></span>${formatTime(p.targets[1])} <span class="medal g"></span>${formatTime(p.targets[2])}</p>
+      </div>
+      <div class="row">
+        <button data-action="pquit">Levels</button>
+        <button ${next ? '' : 'class="primary"'} data-action="restart">Retry</button>
+        ${next ? `<button class="primary" data-action="pbrief" data-id="${next.id}">Next level</button>` : ''}
+      </div>`;
   }
 
   private renderSetup(): string {
@@ -833,11 +1018,28 @@ class Game {
         break;
       case 'resume': this.togglePause(); break;
       case 'restart': {
+        if (this.puzzle) { this.startPuzzle(this.puzzle.def); break; }
         const cur = this.session;
         void this.start(cur?.mode ?? this.setupMode, cur?.event ?? null);
         break;
       }
+      case 'pbrief':
+        if (this.puzzle) { this.endPuzzle(); this.startAttract(); }
+        this.puzzleId = d.id!;
+        this.show('pbrief');
+        break;
+      case 'pstart':
+        if (coarse) document.documentElement.requestFullscreen?.().catch(() => {});
+        this.startPuzzle(LEVELS.find((l) => l.id === this.puzzleId)!);
+        break;
+      case 'pquit':
+        this.endPuzzle();
+        this.startAttract();
+        this.show('puzzles');
+        this.pauseBtn.classList.remove('show');
+        break;
       case 'quit':
+        if (this.puzzle) { this.endPuzzle(); this.startAttract(); this.show('puzzles'); this.pauseBtn.classList.remove('show'); this.touchHint.classList.remove('show'); break; }
         this.startAttract();
         this.show('main');
         this.pauseBtn.classList.remove('show');
@@ -893,6 +1095,32 @@ function drawShip(c: HTMLCanvasElement, hullId: string, color: number, scale: nu
   ctx.scale(scale, scale);
   drawHull2D(ctx, hullById(hullId), hex(color));
   ctx.restore();
+}
+
+const TILE_COLORS: Record<string, string> = {
+  '#': '', '~': '#ff3355', _: '#5a6a8a', i: '#9fe8ff', m: '#8a5a2b', t: '#ffe14d', f: '#ff3df2', A: '#ffe14d', B: '#2ef2ff', C: '#ff3df2',
+  '=': '#ffffff', ':': '#667', G: '#3dff9a', S: '#ffffff', a: '#ffe14d', b: '#2ef2ff', c: '#ff3df2', O: '#b06bff', X: '#ff7a3d',
+  p: '#5ad1ff', q: '#5ad1ff', u: '#b06bff', y: '#b06bff', '*': '#3dff9a', R: '#ff5a6a', H: '#ff5a6a', V: '#ff5a6a', '+': '#8fa3c9',
+};
+
+function drawLevel(c: HTMLCanvasElement, id: string): void {
+  const lv = LEVELS.find((l) => l.id === id);
+  const ctx = c.getContext('2d');
+  if (!lv || !ctx) return;
+  const rows = lv.map.length, cols = lv.map[0].length;
+  const t = Math.min(c.width / cols, c.height / rows);
+  const ox = (c.width - cols * t) / 2, oy = (c.height - rows * t) / 2;
+  ctx.clearRect(0, 0, c.width, c.height);
+  for (let r = 0; r < rows; r++) {
+    for (let k = 0; k < cols; k++) {
+      const ch = lv.map[r][k];
+      if (ch === '#') continue;
+      ctx.fillStyle = '#121a2e';
+      ctx.fillRect(ox + k * t, oy + r * t, t, t);
+      const col = TILE_COLORS[ch];
+      if (col) { ctx.fillStyle = col; ctx.fillRect(ox + k * t + t * 0.15, oy + r * t + t * 0.15, t * 0.7, t * 0.7); }
+    }
+  }
 }
 
 function drawPreview(c: HTMLCanvasElement, id: string): void {

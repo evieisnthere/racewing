@@ -181,7 +181,7 @@ export function generate(seed: number, params: Partial<GenParams> = {}, validate
     if (plain.clearanceIssues(80).length) continue;
     let minHw = Infinity, maxCurv = 0;
     for (let i = 0; i < plain.n; i++) { minHw = Math.min(minHw, plain.hw[i]); maxCurv = Math.max(maxCurv, Math.abs(plain.curv[i])); }
-    if (minHw < width * 0.3 || maxCurv > 1 / 110) continue;
+    if (minHw < width * 0.55 * 0.3 || maxCurv > 1 / 55) continue;
     gimmickify(plain, rand, p, def);
     fallback ??= def;
     if (!validate || lapsCleanly(def)) return def;
@@ -216,7 +216,7 @@ function polygonClear(pts: number[][], minGap: number): boolean {
 function lapsCleanly(def: TrackDef): boolean {
   const track = new Track(def);
   const race = new Race({ track, laps: 1, racers: [{ name: '', color: 0, kind: 'bot', tier: 'easy' }], scheme: 'thrust', rubberBand: false, collisions: false, seed: 1 });
-  const limit = track.length / 180;
+  const limit = track.length / 90;
   const r = race.racers[0];
   let best = -1, bestAt = 0;
   while (race.state !== 'finished' && race.time < limit) {

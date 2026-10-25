@@ -2,37 +2,44 @@ import { clamp, smoothstep, wrapAngle } from './math';
 import { inRegion, type Course, type Segment } from './course';
 import { Track } from './track';
 
+// Data Wing-scale world: a ship is ~28 units long, tracks are ~4-5 ships wide.
+// Motion model: velocity keeps its magnitude and swings toward the heading (drift), losing speed only in
+// proportion to how sideways you're sliding. A weak engine and low drag mean momentum does the work;
+// grinding a wall with your engine flame adds roughly +50% on top of cruise speed.
 export const PHYS = {
-  thrust: 330,
-  drag: 0.62,
-  /** Lateral velocity decay rate; some of the bled speed is fed forward. */
-  grip: 1.7,
-  gripConvert: 0.25,
-  turnRate: 3.1,
-  turnAccel: 30,
-  brake: 900,
-  reverse: 300,
-  maxReverse: 180,
+  thrust: 165,
+  drag: 0.55,
+  /** How fast velocity swings toward the heading (1/s): lower = longer drifts. */
+  align: 2.4,
+  /** Speed lost per second at a full 90-degree slide. */
+  slipLoss: 0.7,
+  turnRate: 3.0,
+  turnAccel: 26,
+  brake: 420,
+  reverse: 120,
+  maxReverse: 90,
   radius: 9,
   /** sin(impact angle) below which wall contact is a slide rather than a hit. */
-  scrapeAngle: 0.42,
+  scrapeAngle: 0.45,
   /** Speed lost per second while sliding along a wall nose-first. */
-  wallFriction: 0.5,
-  /** Grinding: tail (engine flame) at the wall, nose angled away from it. */
-  grindReach: 18,
+  wallFriction: 0.4,
+  /** Grinding: tail (engine flame) within reach of the wall, nose angled away from it or near-parallel. */
+  grindReach: 13,
   /** sin of the angle between nose and wall; slightly negative lets a near-parallel nose still count. */
-  grindMinAngle: -0.12,
-  scrapeAccel: 330,
+  grindMinAngle: -0.15,
+  scrapeAccel: 80,
+  /** Pull toward the wall while grinding, so you can ride it through corners. */
+  grindHold: 150,
   /** Scales every gravity zone and well. */
-  fieldScale: 0.8,
-  restitution: 0.35,
-  hitLoss: 0.5,
-  padBoost: 220,
-  padMax: 850,
+  fieldScale: 0.42,
+  restitution: 0.3,
+  hitLoss: 0.45,
+  padBoost: 110,
+  padMax: 430,
   padCooldown: 0.5,
   shipBounce: 0.6,
   /** Extra shove from moving hazard bars. */
-  hazardKick: 260,
+  hazardKick: 160,
   portalCooldown: 0.6,
   fallTime: 0.8,
 };
@@ -62,6 +69,8 @@ export interface Ship {
   /** Falling into a pit: seconds until respawn. */
   fall: number;
   portalCd: number;
+  /** Portal exit the ship arrived at; it can't re-enter until it has left that circle. */
+  lockX: number; lockY: number; lockR: number;
   /** Set when a portal fired this step (for effects). */
   warped: number;
   flipped: boolean;
@@ -75,7 +84,7 @@ export function makeShip(x: number, y: number, angle: number, idx: number): Ship
     x, y, vx: 0, vy: 0, angle, angVel: 0, idx,
     scrape: 0, scrapeX: 0, scrapeY: 0, scrapeNx: 0, scrapeNy: 0,
     hit: 0, hitX: 0, hitY: 0, boost: 0, padCd: 0, thrustMul: 1, throttle: 0, turn: 0, inField: false,
-    air: 0, airMax: 0, fall: 0, portalCd: 0, warped: 0, flipped: false, surface: '',
+    air: 0, airMax: 0, fall: 0, portalCd: 0, lockX: 0, lockY: 0, lockR: 0, warped: 0, flipped: false, surface: '',
     checkX: x, checkY: y, checkAngle: angle,
   };
 }
@@ -117,7 +126,7 @@ export function stepShip(s: Ship, intent: Intent, course: Course, dt: number): v
     if (s.fall <= 0) {
       const p = course.respawnPoint(s);
       s.x = p.x; s.y = p.y; s.angle = p.angle; s.angVel = 0;
-      s.vx = Math.cos(p.angle) * 120; s.vy = Math.sin(p.angle) * 120;
+      s.vx = Math.cos(p.angle) * 60; s.vy = Math.sin(p.angle) * 60;
       if (track) s.idx = track.nearest(s.x, s.y, -1);
     }
     return;
@@ -149,24 +158,29 @@ export function stepShip(s: Ship, intent: Intent, course: Course, dt: number): v
       const a = PHYS.thrust * s.thrustMul * thrustMul * intent.throttle * dt;
       s.vx += hx * a; s.vy += hy * a;
     } else if (intent.throttle < 0) {
-      if (fwd > 20) {
-        const d = Math.min(PHYS.brake * dt, fwd);
-        s.vx -= hx * d; s.vy -= hy * d;
+      if (fwd > 10) {
+        const sp = Math.hypot(s.vx, s.vy);
+        const k = Math.max(0, sp - PHYS.brake * dt) / sp;
+        s.vx *= k; s.vy *= k;
       } else if (fwd > -PHYS.maxReverse) {
         s.vx -= hx * PHYS.reverse * dt; s.vy -= hy * PHYS.reverse * dt;
       }
     }
 
-    // Lateral grip: bleed sideways velocity, feeding part of it forward so carving a turn isn't a dead loss.
-    const grip = sf?.kind === 'ice' ? PHYS.grip * 0.12 : PHYS.grip;
-    const px = -hy, py = hx;
-    const lat = s.vx * px + s.vy * py;
-    const dl = lat * (1 - Math.exp(-grip * dt));
-    s.vx -= px * dl; s.vy -= py * dl;
-    const gain = Math.abs(dl) * PHYS.gripConvert * Math.sign(fwd);
-    s.vx += hx * gain; s.vy += hy * gain;
+    // Drift: velocity keeps its speed and swings toward the nose; sliding sideways costs a little speed.
+    const sp = Math.hypot(s.vx, s.vy);
+    if (sp > 1 && fwd > -5) {
+      const ice = sf?.kind === 'ice';
+      const va = Math.atan2(s.vy, s.vx);
+      const slip = wrapAngle(s.angle - va);
+      const swing = slip * (1 - Math.exp(-(ice ? PHYS.align * 0.15 : PHYS.align) * dt));
+      const loss = Math.abs(Math.sin(slip)) * (ice ? 0.1 : PHYS.slipLoss) * dt;
+      const ns = sp * (1 - loss);
+      s.vx = Math.cos(va + swing) * ns;
+      s.vy = Math.sin(va + swing) * ns;
+    }
 
-    const dragK = sf?.kind === 'ice' ? PHYS.drag * 0.35 : sf?.kind === 'mud' ? PHYS.drag + 2.4 : PHYS.drag;
+    const dragK = sf?.kind === 'ice' ? PHYS.drag * 0.4 : sf?.kind === 'mud' ? PHYS.drag + 2.2 : PHYS.drag;
     const drag = Math.exp(-dragK * dt);
     s.vx *= drag; s.vy *= drag;
 
@@ -205,18 +219,21 @@ export function stepShip(s: Ship, intent: Intent, course: Course, dt: number): v
     }
 
     if (s.scrape > 0) {
-      const sp = Math.hypot(s.vx, s.vy);
-      if (sp > 1) {
-        s.vx += (s.vx / sp) * PHYS.scrapeAccel * dt;
-        s.vy += (s.vy / sp) * PHYS.scrapeAccel * dt;
+      const v = Math.hypot(s.vx, s.vy);
+      if (v > 1) {
+        s.vx += (s.vx / v) * PHYS.scrapeAccel * dt;
+        s.vy += (s.vy / v) * PHYS.scrapeAccel * dt;
       }
+      // Hold against the wall (the normal points away from it).
+      s.vx -= s.scrapeNx * PHYS.grindHold * dt;
+      s.vy -= s.scrapeNy * PHYS.grindHold * dt;
     }
 
     for (const r of course.ramps) {
       if (!inRegion(r, s.x, s.y)) continue;
       const along = s.vx * r.dx + s.vy * r.dy;
-      if (along > 120) {
-        s.air = s.airMax = clamp(0.4 + along / 550, 0.6, 1.3);
+      if (along > 60) {
+        s.air = s.airMax = clamp(0.45 + along / 400, 0.6, 1.2);
         s.angVel = 0;
       }
       break;
@@ -249,11 +266,13 @@ export function padBoost(s: Ship, hx: number, hy: number): void {
 }
 
 function warp(s: Ship, course: Course, track: Track | null): void {
+  if (s.lockR > 0 && (s.x - s.lockX) ** 2 + (s.y - s.lockY) ** 2 > s.lockR * s.lockR) s.lockR = 0;
   if (s.portalCd > 0) return;
   for (const p of course.portals) {
     for (const forward of p.twoWay ? [true, false] : [true]) {
       const [fx, fy, fa, tx, ty, ta] = forward ? [p.ax, p.ay, p.aAngle, p.bx, p.by, p.bAngle] : [p.bx, p.by, p.bAngle, p.ax, p.ay, p.aAngle];
       if ((s.x - fx) ** 2 + (s.y - fy) ** 2 > p.r * p.r) continue;
+      if (s.lockR > 0 && fx === s.lockX && fy === s.lockY) continue;
       // Keep speed; rotate velocity and heading by the difference between the portal orientations.
       const rot = ta - fa;
       const c = Math.cos(rot), sn = Math.sin(rot);
@@ -264,6 +283,7 @@ function warp(s: Ship, course: Course, track: Track | null): void {
       s.x = tx + (vx / sp) * (p.r + 14);
       s.y = ty + (vy / sp) * (p.r + 14);
       s.portalCd = PHYS.portalCooldown;
+      s.lockX = tx; s.lockY = ty; s.lockR = p.r + 60;
       s.warped = 0.35;
       if (track) s.idx = track.nearest(s.x, s.y, -1);
       return;
@@ -339,7 +359,7 @@ function respond(s: Ship, nx: number, ny: number, cx: number, cy: number): void 
 function grind(s: Ship, course: Course): void {
   const hx = Math.cos(s.angle), hy = Math.sin(s.angle);
   const sp = Math.hypot(s.vx, s.vy);
-  if (sp < 120 || (s.vx * hx + s.vy * hy) < 0) return;
+  if (sp < 60 || (s.vx * hx + s.vy * hy) < 0) return;
   const tailX = s.x - hx * PHYS.radius, tailY = s.y - hy * PHYS.radius;
   const reach = PHYS.grindReach;
   let best = reach * reach, bx = 0, by = 0, bnx = 0, bny = 0;

@@ -28,10 +28,10 @@ export interface Skill {
 }
 
 export const SKILLS: Record<Tier, Skill> = {
-  easy: { react: 0.11, deadzone: 0.14, lookahead: 0.42, latAccel: 1500, lineBlend: 0.35, margin: 40, noise: 0.35, mistake: 0.05, padSeek: 0, power: 0.86 },
-  medium: { react: 0.07, deadzone: 0.09, lookahead: 0.36, latAccel: 2100, lineBlend: 0.65, margin: 26, noise: 0.2, mistake: 0.02, padSeek: 0.5, power: 0.93 },
-  hard: { react: 0.04, deadzone: 0.06, lookahead: 0.32, latAccel: 2700, lineBlend: 0.9, margin: 14, noise: 0.1, mistake: 0.006, padSeek: 1, power: 0.98 },
-  insane: { react: 0.02, deadzone: 0.035, lookahead: 0.3, latAccel: 3300, lineBlend: 1, margin: 4, noise: 0.04, mistake: 0, padSeek: 1, power: 1.02 },
+  easy: { react: 0.11, deadzone: 0.14, lookahead: 0.42, latAccel: 600, lineBlend: 0.35, margin: 20, noise: 0.35, mistake: 0.05, padSeek: 0, power: 0.86 },
+  medium: { react: 0.07, deadzone: 0.09, lookahead: 0.36, latAccel: 840, lineBlend: 0.65, margin: 13, noise: 0.2, mistake: 0.02, padSeek: 0.5, power: 0.93 },
+  hard: { react: 0.04, deadzone: 0.06, lookahead: 0.32, latAccel: 1080, lineBlend: 0.9, margin: 6, noise: 0.1, mistake: 0.006, padSeek: 1, power: 0.98 },
+  insane: { react: 0.02, deadzone: 0.035, lookahead: 0.3, latAccel: 1320, lineBlend: 1, margin: 1, noise: 0.04, mistake: 0, padSeek: 1, power: 1.02 },
 };
 
 export const TIER_NAMES: Record<Tier, string> = { easy: 'Easy', medium: 'Medium', hard: 'Hard', insane: 'Insane' };
@@ -69,9 +69,9 @@ export class Bot {
       this.reversing -= k.react;
       return this.set(true, true);
     }
-    if (speed < 60) this.stuck += k.react; else this.stuck = 0;
+    if (speed < 30) this.stuck += k.react; else this.stuck = 0;
 
-    const look = 50 + Math.max(0, fwd) * k.lookahead;
+    const look = 25 + Math.max(0, fwd) * k.lookahead;
     const ti = track.wrap(s.idx + Math.round(look / SPACING));
     const wander = Math.sin(time * 0.6 + this.phase) * k.noise;
     const lim = Math.max(0, track.hw[ti] - PHYS.radius - k.margin);
@@ -105,8 +105,8 @@ export class Bot {
       return d < 45 || track.inRange(s.idx, a, b);
     });
     // Brake if any upcoming corner within stopping distance needs less speed.
-    if (fwd > 200 && Math.abs(err) < 1.2 && !jumpAhead) {
-      const reach = (fwd * fwd) / (2 * PHYS.brake) + fwd * 0.15 + 60;
+    if (fwd > 100 && Math.abs(err) < 1.2 && !jumpAhead) {
+      const reach = (fwd * fwd) / (2 * PHYS.brake) + fwd * 0.15 + 30;
       const steps = Math.min(track.n >> 1, Math.ceil(reach / SPACING));
       for (let j = 2; j <= steps; j += 2) {
         const i = track.wrap(s.idx + j);

@@ -32,18 +32,18 @@ export class GimmickLayer extends Container {
       this.addChild(g);
       // Texture marks inside the region.
       const marks = new Graphics();
-      const step = s.kind === 'mud' ? 34 : 56;
+      const step = s.kind === 'mud' ? 17 : 28;
       for (let x = s.minX; x < s.maxX; x += step) {
         for (let y = s.minY; y < s.maxY; y += step) {
           const ox = x + ((y / step) % 2) * step * 0.5;
           if (!inPoly(s.poly, ox, y)) continue;
-          if (s.kind === 'ice') marks.moveTo(ox - 8, y + 4).lineTo(ox + 8, y - 4).stroke({ width: 1.5, color: 0xffffff, alpha: 0.25 });
-          else if (s.kind === 'mud') marks.circle(ox, y, 4).fill({ color: 0x3a240f, alpha: 0.7 });
+          if (s.kind === 'ice') marks.moveTo(ox - 4, y + 2).lineTo(ox + 4, y - 2).stroke({ width: 0.8, color: 0xffffff, alpha: 0.3 });
+          else if (s.kind === 'mud') marks.circle(ox, y, 2).fill({ color: 0x3a240f, alpha: 0.7 });
           else if (s.kind === 'flip') {
             marks.moveTo(ox - 10, y).lineTo(ox + 10, y).stroke({ width: 2, color: 0xff3df2, alpha: 0.4 });
             marks.moveTo(ox - 10, y).lineTo(ox - 5, y - 5).moveTo(ox - 10, y).lineTo(ox - 5, y + 5).stroke({ width: 2, color: 0xff3df2, alpha: 0.4 });
             marks.moveTo(ox + 10, y).lineTo(ox + 5, y - 5).moveTo(ox + 10, y).lineTo(ox + 5, y + 5).stroke({ width: 2, color: 0xff3df2, alpha: 0.4 });
-          } else marks.circle(ox, y, 3).fill({ color: 0xffe14d, alpha: 0.5 });
+          } else marks.circle(ox, y, 1.5).fill({ color: 0xffe14d, alpha: 0.5 });
         }
       }
       if (s.kind === 'turbo' || s.kind === 'flip') {
@@ -56,26 +56,26 @@ export class GimmickLayer extends Container {
     for (const p of c.pits) {
       const g = new Graphics()
         .poly(p.poly).fill({ color: 0x000000, alpha: 1 })
-        .poly(p.poly).stroke({ width: 10, color: 0xff3355, alpha: 0.18 })
-        .poly(p.poly).stroke({ width: 2.5, color: 0xff3355, alpha: 0.9 });
+        .poly(p.poly).stroke({ width: 4, color: 0xff3355, alpha: 0.18 })
+        .poly(p.poly).stroke({ width: 1.2, color: 0xff3355, alpha: 0.9 });
       this.addChild(g);
       const hatch = new Graphics();
-      for (let x = p.minX; x < p.maxX; x += 26) {
-        for (let y = p.minY; y < p.maxY; y += 26) {
-          if (inPoly(p.poly, x, y)) hatch.circle(x, y, 1.6).fill({ color: 0xff3355, alpha: 0.25 });
+      for (let x = p.minX; x < p.maxX; x += 13) {
+        for (let y = p.minY; y < p.maxY; y += 13) {
+          if (inPoly(p.poly, x, y)) hatch.circle(x, y, 0.8).fill({ color: 0xff3355, alpha: 0.25 });
         }
       }
       this.addChild(hatch);
     }
 
     for (const r of c.ramps) {
-      const g = new Graphics().poly(r.poly).fill({ color: 0xffffff, alpha: 0.12 }).poly(r.poly).stroke({ width: 2, color: 0xffffff, alpha: 0.5 });
+      const g = new Graphics().poly(r.poly).fill({ color: 0xffffff, alpha: 0.12 }).poly(r.poly).stroke({ width: 1, color: 0xffffff, alpha: 0.5 });
       this.addChild(g);
       const cx = (r.minX + r.maxX) / 2, cy = (r.minY + r.maxY) / 2;
       const ang = Math.atan2(r.dy, r.dx);
       for (let k = -1; k <= 1; k++) {
-        const ch = chevron(new Graphics(), 12, 0xffffff, 4);
-        ch.position.set(cx + -r.dy * k * 34, cy + r.dx * k * 34);
+        const ch = chevron(new Graphics(), 6, 0xffffff, 2);
+        ch.position.set(cx + -r.dy * k * 17, cy + r.dx * k * 17);
         ch.rotation = ang;
         ch.blendMode = 'add';
         this.addChild(ch);
@@ -85,16 +85,16 @@ export class GimmickLayer extends Container {
 
     for (const w of c.wells) {
       const color = w.strength > 0 ? 0xb06bff : 0xff7a3d;
-      const halo = new Graphics().circle(w.x, w.y, w.radius).fill({ color, alpha: 0.025 }).circle(w.x, w.y, w.radius).stroke({ width: 2, color, alpha: 0.12 });
+      const halo = new Graphics().circle(w.x, w.y, w.radius).fill({ color, alpha: 0.025 }).circle(w.x, w.y, w.radius).stroke({ width: 1, color, alpha: 0.12 });
       this.addChild(halo);
       const core = new Graphics()
-        .circle(w.x, w.y, 34).fill({ color, alpha: 0.18 })
-        .circle(w.x, w.y, 16).fill({ color, alpha: 0.7 })
-        .circle(w.x, w.y, 6).fill({ color: 0xffffff });
+        .circle(w.x, w.y, 17).fill({ color, alpha: 0.18 })
+        .circle(w.x, w.y, 8).fill({ color, alpha: 0.7 })
+        .circle(w.x, w.y, 3).fill({ color: 0xffffff });
       core.blendMode = 'add';
       this.addChild(core);
       for (let k = 0; k < 4; k++) {
-        const g = new Graphics().circle(0, 0, w.radius).stroke({ width: 3, color, alpha: 1 });
+        const g = new Graphics().circle(0, 0, w.radius).stroke({ width: 1.5, color, alpha: 1 });
         g.position.set(w.x, w.y);
         g.blendMode = 'add';
         this.addChild(g);
@@ -110,8 +110,8 @@ export class GimmickLayer extends Container {
         const ring = new Graphics();
         for (let k = 0; k < 8; k++) {
           const a0 = (k / 8) * Math.PI * 2, a1 = a0 + 0.45;
-          ring.arc(0, 0, p.r, a0, a1).stroke({ width: entry ? 5 : 3, color: p.color, alpha: entry ? 1 : 0.55 });
-          ring.moveTo(Math.cos(a1 + 0.33) * (p.r - 12), Math.sin(a1 + 0.33) * (p.r - 12));
+          ring.moveTo(Math.cos(a0) * p.r, Math.sin(a0) * p.r).arc(0, 0, p.r, a0, a1).stroke({ width: entry ? 2.5 : 1.5, color: p.color, alpha: entry ? 1 : 0.55 });
+          ring.moveTo(Math.cos(a1 + 0.33) * (p.r - 6), Math.sin(a1 + 0.33) * (p.r - 6));
         }
         ring.position.set(x, y);
         ring.blendMode = 'add';
@@ -137,16 +137,16 @@ export class GimmickLayer extends Container {
     const g = this.hazardG.clear();
     for (const h of this.course.hazards) {
       for (const [ax, ay, bx, by] of hazardBars(h, this.course.time)) {
-        g.moveTo(ax, ay).lineTo(bx, by).stroke({ width: 16, color: 0xff3355, alpha: 0.18, cap: 'round' });
-        g.moveTo(ax, ay).lineTo(bx, by).stroke({ width: 5, color: 0xff5a6a, alpha: 1, cap: 'round' });
+        g.moveTo(ax, ay).lineTo(bx, by).stroke({ width: 8, color: 0xff3355, alpha: 0.18, cap: 'round' });
+        g.moveTo(ax, ay).lineTo(bx, by).stroke({ width: 2.5, color: 0xff5a6a, alpha: 1, cap: 'round' });
       }
-      if (h.kind === 'spin') g.circle(h.cx, h.cy, 9).fill({ color: 0xffffff, alpha: 0.9 });
+      if (h.kind === 'spin') g.circle(h.cx, h.cy, 4.5).fill({ color: 0xffffff, alpha: 0.9 });
     }
     const o = this.orbG.clear();
     for (const orb of this.course.orbs) {
       if (orb.cooldown > 0) continue;
       const pulse = 1 + 0.25 * Math.sin(time * 6 + orb.x);
-      o.circle(orb.x, orb.y, 16 * pulse).fill({ color: 0x3dff9a, alpha: 0.18 }).circle(orb.x, orb.y, 6).fill({ color: 0xb8ffd9 });
+      o.circle(orb.x, orb.y, 9 * pulse).fill({ color: 0x3dff9a, alpha: 0.18 }).circle(orb.x, orb.y, 3.5).fill({ color: 0xb8ffd9 });
     }
   }
 }

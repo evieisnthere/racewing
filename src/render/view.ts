@@ -19,7 +19,7 @@ function closedPath(g: Graphics, xs: Float64Array, ys: Float64Array): Graphics {
 }
 
 function glowWall(parent: Container, xs: Float64Array, ys: Float64Array, color: number): void {
-  const layers: [number, number][] = [[22, 0.05], [10, 0.14], [4, 0.5], [1.8, 1]];
+  const layers: [number, number][] = [[10, 0.06], [4.5, 0.16], [2, 0.55], [1, 1]];
   for (const [width, alpha] of layers) {
     const g = closedPath(new Graphics(), xs, ys).stroke({ width, color, alpha, join: 'round' });
     if (width > 3) g.blendMode = 'add';
@@ -47,10 +47,10 @@ class TrackLayer extends Container {
     const rand = mulberry32(track.n);
 
     const stars = new Graphics();
-    const pad = 1600;
-    const count = Math.min(2500, Math.round(((b.maxX - b.minX + pad * 2) * (b.maxY - b.minY + pad * 2)) / 9000));
+    const pad = 700;
+    const count = Math.min(2500, Math.round(((b.maxX - b.minX + pad * 2) * (b.maxY - b.minY + pad * 2)) / 2500));
     for (let i = 0; i < count; i++) {
-      stars.circle(b.minX - pad + rand() * (b.maxX - b.minX + pad * 2), b.minY - pad + rand() * (b.maxY - b.minY + pad * 2), 0.8 + rand() * 1.8)
+      stars.circle(b.minX - pad + rand() * (b.maxX - b.minX + pad * 2), b.minY - pad + rand() * (b.maxY - b.minY + pad * 2), 0.4 + rand() * 0.9)
         .fill({ color: rand() < 0.15 ? d.accent : 0xffffff, alpha: 0.12 + rand() * 0.4 });
     }
     this.addChild(stars);
@@ -67,7 +67,7 @@ class TrackLayer extends Container {
     const stripes = new Graphics();
     for (let i = 0; i < n; i += 5) {
       stripes.moveTo(track.lx[i], track.ly[i]).lineTo(track.rx[i], track.ry[i])
-        .stroke({ width: i % 25 === 0 ? 3 : 1.5, color: d.color, alpha: i % 25 === 0 ? 0.12 : 0.05 });
+        .stroke({ width: i % 25 === 0 ? 1.4 : 0.7, color: d.color, alpha: i % 25 === 0 ? 0.14 : 0.06 });
     }
     this.addChild(stripes);
 
@@ -83,14 +83,14 @@ class TrackLayer extends Container {
         const hw = track.hw[i];
         const angle = Math.atan2(track.ty[i], track.tx[i]) + z.angle;
         const ux = Math.cos(angle), uy = Math.sin(angle);
-        for (let lat = -hw + 35; lat <= hw - 35; lat += 55) {
+        for (let lat = -hw + 18; lat <= hw - 18; lat += 30) {
           const x = track.cx[i] + track.nx[i] * lat, y = track.cy[i] + track.ny[i] * lat;
-          const g = chevron(new Graphics(), 11, 0x3dff9a, 3.5);
+          const g = chevron(new Graphics(), 6, 0x3dff9a, 2);
           g.position.set(x, y);
           g.rotation = angle;
           g.blendMode = 'add';
           this.addChild(g);
-          this.pulses.push({ g, phase: (x * ux + y * uy) / 90, base: 0.08 });
+          this.pulses.push({ g, phase: (x * ux + y * uy) / 45, base: 0.08 });
         }
         if (z.i0 === z.i1) break;
       }
@@ -99,7 +99,7 @@ class TrackLayer extends Container {
     for (const p of track.pads) {
       for (let i = p.i0, j = 0; track.inRange(i, p.i0, p.i1); i = (i + 2) % n, j++) {
         const x = track.cx[i] + track.nx[i] * p.lat, y = track.cy[i] + track.ny[i] * p.lat;
-        const g = chevron(new Graphics(), p.halfWidth * 0.55, 0xffe14d, 5);
+        const g = chevron(new Graphics(), p.halfWidth * 0.55, 0xffe14d, 2.5);
         g.position.set(x, y);
         g.rotation = Math.atan2(track.ty[i], track.tx[i]);
         g.blendMode = 'add';
@@ -117,8 +117,8 @@ class TrackLayer extends Container {
         const f0 = c / cells, f1 = (c + 1) / cells;
         const ax = track.lx[0] + (track.rx[0] - track.lx[0]) * f0, ay = track.ly[0] + (track.ry[0] - track.ly[0]) * f0;
         const bx = track.lx[0] + (track.rx[0] - track.lx[0]) * f1, by = track.ly[0] + (track.ry[0] - track.ly[0]) * f1;
-        const ox = track.tx[0] * 10 * row, oy = track.ty[0] * 10 * row;
-        start.poly([ax + ox, ay + oy, bx + ox, by + oy, bx + ox + track.tx[0] * 10, by + oy + track.ty[0] * 10, ax + ox + track.tx[0] * 10, ay + oy + track.ty[0] * 10])
+        const ox = track.tx[0] * 5 * row, oy = track.ty[0] * 5 * row;
+        start.poly([ax + ox, ay + oy, bx + ox, by + oy, bx + ox + track.tx[0] * 5, by + oy + track.ty[0] * 5, ax + ox + track.tx[0] * 5, ay + oy + track.ty[0] * 5])
           .fill({ color: 0xffffff, alpha: (c + row) % 2 ? 0.75 : 0.08 });
       }
     }
@@ -165,7 +165,7 @@ class ShipSprite extends Container {
     this.shade.visible = h > 0.01;
     if (!this.shade.visible) return;
     // Offset down-right in world space, compensating for the ship's own rotation and scale.
-    const d = 6 + h * 26, a = -this.rotation;
+    const d = 4 + h * 18, a = -this.rotation;
     this.shade.position.set((Math.cos(a) * d - Math.sin(a) * d) / this.scale.x, (Math.sin(a) * d + Math.cos(a) * d) / this.scale.x);
     this.shade.scale.set(1 / this.scale.x);
   }
@@ -293,44 +293,44 @@ export class View {
       if (s.warped > 0.3 || s.fall > 0) pts.length = 0;
       if (s.warped > 0.33) {
         for (let k = 0; k < 18; k++) {
-          const a = this.rand() * Math.PI * 2, v = 60 + this.rand() * 260;
+          const a = this.rand() * Math.PI * 2, v = 30 + this.rand() * 130;
           this.spark(s.x, s.y, Math.cos(a) * v, Math.sin(a) * v, 0x5ad1ff, 0.4);
         }
         s.warped = 0.3;
       }
       const lx = pts[pts.length - 2], ly = pts[pts.length - 1];
-      if (pts.length === 0 || (s.x - lx) ** 2 + (s.y - ly) ** 2 > 36) {
+      if (pts.length === 0 || (s.x - lx) ** 2 + (s.y - ly) ** 2 > 9) {
         pts.push(s.x - Math.cos(s.angle) * 8, s.y - Math.sin(s.angle) * 8);
-        if (pts.length > 60) pts.splice(0, 2);
+        if (pts.length > 80) pts.splice(0, 2);
       }
       const g = trail.g.clear();
       const m = pts.length / 2;
       for (let k = 1; k < m; k++) {
         const f = k / m;
         g.moveTo(pts[k * 2 - 2], pts[k * 2 - 1]).lineTo(pts[k * 2], pts[k * 2 + 1])
-          .stroke({ width: 1 + f * 5, color: r.spec.color, alpha: f * 0.45, cap: 'round' });
+          .stroke({ width: 0.6 + f * 2.6, color: r.spec.color, alpha: f * 0.45, cap: 'round' });
       }
 
       if (s.scrape > 0) {
         for (let k = 0; k < 2; k++) {
           this.spark(s.scrapeX, s.scrapeY,
-            s.vx * 0.15 + s.scrapeNx * (60 + this.rand() * 220) + (this.rand() - 0.5) * 160,
-            s.vy * 0.15 + s.scrapeNy * (60 + this.rand() * 220) + (this.rand() - 0.5) * 160,
+            s.vx * 0.2 + s.scrapeNx * (30 + this.rand() * 110) + (this.rand() - 0.5) * 80,
+            s.vy * 0.2 + s.scrapeNy * (30 + this.rand() * 110) + (this.rand() - 0.5) * 80,
             this.rand() < 0.5 ? 0xffe14d : 0xff7a3d, 0.25 + this.rand() * 0.2);
         }
       }
-      if (s.hit > 250) {
-        const count = Math.min(24, Math.round(s.hit / 30));
+      if (s.hit > 120) {
+        const count = Math.min(24, Math.round(s.hit / 15));
         for (let k = 0; k < count; k++) {
-          const a = this.rand() * Math.PI * 2, v = 80 + this.rand() * s.hit * 0.6;
+          const a = this.rand() * Math.PI * 2, v = 40 + this.rand() * s.hit * 0.6;
           this.spark(s.hitX, s.hitY, Math.cos(a) * v, Math.sin(a) * v, r.spec.color, 0.35 + this.rand() * 0.3);
         }
-        if (r === this.follow) this.shake = Math.min(14, s.hit / 60);
+        if (r === this.follow) this.shake = Math.min(6, s.hit / 60);
         s.hit = 0;
       }
       if (s.boost > 0.55) {
         for (let k = 0; k < 3; k++) {
-          this.spark(s.x, s.y, -s.vx * 0.3 + (this.rand() - 0.5) * 200, -s.vy * 0.3 + (this.rand() - 0.5) * 200, 0xffe14d, 0.4);
+          this.spark(s.x, s.y, -s.vx * 0.3 + (this.rand() - 0.5) * 100, -s.vy * 0.3 + (this.rand() - 0.5) * 100, 0xffe14d, 0.4);
         }
       }
     });
@@ -353,14 +353,15 @@ export class View {
       p.s.x += p.vx * dt; p.s.y += p.vy * dt;
       p.s.alpha = p.life / p.max;
       p.s.rotation = Math.atan2(p.vy, p.vx);
-      p.s.width = 2 + Math.hypot(p.vx, p.vy) * 0.03;
+      p.s.width = 1 + Math.hypot(p.vx, p.vy) * 0.03;
     }
 
     // Camera: lead the ship, zoom out with speed.
     const s = this.follow.ship;
     const speed = Math.hypot(s.vx, s.vy);
-    const base = Math.min(this.w, this.h) / 640;
-    const targetZoom = base * clamp(1.2 - speed / 1300, 0.68, 1.2);
+    // About 8 ships across the shorter screen edge.
+    const base = Math.min(this.w, this.h) / 235;
+    const targetZoom = base * clamp(1.1 - speed / 1800, 0.86, 1.1);
     this.zoom += (targetZoom - this.zoom) * (1 - Math.exp(-2.2 * dt));
     const tx = s.x + s.vx * 0.35, ty = s.y + s.vy * 0.35;
     const k = 1 - Math.exp(-7 * dt);
@@ -383,7 +384,7 @@ export class View {
   /** Explosion of sparks, e.g. when a ship is knocked out. */
   burst(x: number, y: number, color: number): void {
     for (let k = 0; k < 60; k++) {
-      const a = this.rand() * Math.PI * 2, v = 60 + this.rand() * 520;
+      const a = this.rand() * Math.PI * 2, v = 30 + this.rand() * 260;
       this.spark(x, y, Math.cos(a) * v, Math.sin(a) * v, k % 3 ? color : 0xffffff, 0.5 + this.rand() * 0.6);
     }
   }
@@ -398,7 +399,7 @@ export class View {
     }
     s.visible = true;
     s.position.set(x, y);
-    s.height = 1.8;
+    s.height = 0.9;
     s.tint = color;
     this.sparks.push({ s, vx, vy, life, max: life });
   }

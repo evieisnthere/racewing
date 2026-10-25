@@ -254,14 +254,14 @@ export class Sound {
     const e = this.engines[i];
     if (!e || !this.ctx) return;
     const t = this.ctx.currentTime;
-    const f = 42 + speed * 0.075;
+    const f = 42 + speed * 0.16;
     e.osc1.frequency.setTargetAtTime(f, t, 0.05);
     e.osc2.frequency.setTargetAtTime(f * 2.01, t, 0.05);
-    e.filter.frequency.setTargetAtTime(180 + speed * 1.4 + (throttle > 0 ? 250 : 0), t, 0.06);
+    e.filter.frequency.setTargetAtTime(180 + speed * 3 + (throttle > 0 ? 250 : 0), t, 0.06);
     const share = 1 / Math.max(1, this.engines.length);
     e.gain.gain.setTargetAtTime(active ? (throttle !== 0 ? 0.085 : 0.05) * share : 0, t, 0.08);
     e.noiseGain.gain.setTargetAtTime(active && grinding ? 0.11 * share : 0, t, 0.03);
-    e.noiseFilter.frequency.setTargetAtTime(1600 + speed * 1.5, t, 0.05);
+    e.noiseFilter.frequency.setTargetAtTime(1600 + speed * 3, t, 0.05);
   }
 
   // ---------- one-shots ----------
@@ -270,7 +270,7 @@ export class Sound {
     const ctx = this.ctx;
     if (!ctx) return;
     const t = ctx.currentTime;
-    const v = Math.min(1, strength / 500);
+    const v = Math.min(1, strength / 250);
     const o = ctx.createOscillator();
     o.frequency.setValueAtTime(140, t);
     o.frequency.exponentialRampToValueAtTime(38, t + 0.2);
