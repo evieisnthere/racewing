@@ -10,6 +10,7 @@ import { char, defaultTier, PIT_CREW } from './core/characters';
 import { drawHull2D, hullById, PLAYER_COLORS, STARTER_HULLS } from './core/ships';
 import { decodeGhost, encodeGhost, ghostPose, GHOST_HZ, type Ghost } from './core/ghost';
 import { formatTime } from './core/math';
+import type { Ship } from './core/physics';
 import { Race, STEP, type Racer, type RacerSpec } from './core/race';
 import { dailySeed, DEFAULT_PARAMS, generate, genCode, normalize, parseCode, type GenParams } from './core/generator';
 import { getTrack, isGenerated, registerTrack, TRACK_DEFS } from './core/tracks';
@@ -264,7 +265,7 @@ class Game {
       }
       for (const ev of run.events) {
         if (ev.type === 'go') sound.countdown(true);
-        else if (ev.type === 'key') { p.hud.flash('KEY', 'best'); sound.chime('best'); this.buzz(30); }
+        else if (ev.type === 'key') { p.hud.flash('KEY', 'best'); sound.pickup(); this.buzz(30); }
         else if (ev.type === 'switch') { p.hud.flash(run.course.toggled ? 'SWITCH ON' : 'SWITCH OFF'); sound.chime('lap'); }
         else if (ev.type === 'checkpoint') { p.hud.flash('CHECKPOINT'); sound.chime('lap'); }
         else if (ev.type === 'fall') { sound.chime('out'); this.buzz(60); }
@@ -279,6 +280,7 @@ class Game {
       this.lastPuzzleCount = c;
     }
     sound.updateEngine(0, Math.hypot(sh.vx, sh.vy), p.paused ? 0 : sh.throttle, sh.scrape > 0 && !p.paused, !p.paused);
+    if (!p.paused) this.shipSfx(sh);
     if (sh.hit > 120) sound.hit(sh.hit);
     p.view.update(p.paused ? 0 : dt);
     p.hud.update(dt);
@@ -295,6 +297,35 @@ class Game {
   }
 
   private lastPuzzleCount = 99;
+  private sfxPrev = new WeakMap<Ship, { air: number; fall: number; warped: number }>();
+  private whooshAt = new WeakMap<Racer, number>();
+
+  /** Edge-triggered sounds for one ship: jump, land, pit fall, portal warp. */
+  private shipSfx(sh: Ship): void {
+    const p = this.sfxPrev.get(sh) ?? { air: 0, fall: 0, warped: 0 };
+    if (sh.air > 0 && p.air <= 0) sound.jump();
+    if (sh.air <= 0 && p.air > 0 && sh.fall <= 0) sound.land();
+    if (sh.fall > 0 && p.fall <= 0) sound.fall();
+    if (sh.warped > 0.33 && p.warped <= 0.33) sound.warp();
+    p.air = sh.air; p.fall = sh.fall; p.warped = sh.warped;
+    this.sfxPrev.set(sh, p);
+  }
+
+  /** Whoosh when another ship streaks past close by, panned to its side. */
+  private passSfx(me: Racer, all: Racer[], time: number): void {
+    const s = me.ship;
+    for (const o of all) {
+      if (o === me || o.out) continue;
+      const dx = o.ship.x - s.x, dy = o.ship.y - s.y;
+      const d = Math.hypot(dx, dy);
+      if (d > 45) continue;
+      const rel = Math.hypot(o.ship.vx - s.vx, o.ship.vy - s.vy);
+      if (rel < 110 || time - (this.whooshAt.get(o) ?? -9) < 1.2) continue;
+      this.whooshAt.set(o, time);
+      const side = (Math.cos(s.angle) * dy - Math.sin(s.angle) * dx) / Math.max(d, 1);
+      sound.whoosh(side, rel / 300);
+    }
+  }
 
   private end(): void {
     this.endPuzzle();
@@ -392,6 +423,10 @@ class Game {
       if (sh.hit > 120) { sound.hit(sh.hit); this.buzz(Math.min(70, Math.round(sh.hit / 4))); }
       if (sh.boost > s.boost[i]) sound.pad();
       s.boost[i] = sh.boost;
+      if (!s.paused) {
+        this.shipSfx(sh);
+        if (i === 0) this.passSfx(r, race.racers, race.time);
+      }
     });
     const p1 = race.humans[0];
     const final = !!p1 && !p1.finished && race.config.laps > 0 && p1.lap === race.config.laps;

@@ -179,7 +179,11 @@ class ShipSprite extends Container {
   }
 }
 
-interface Spark { s: Sprite; vx: number; vy: number; life: number; max: number }
+interface Spark { s: Sprite; vx: number; vy: number; life: number; max: number; len?: number }
+interface Ring { x: number; y: number; r0: number; r1: number; life: number; max: number; color: number; width: number }
+interface Scorch { ax: number; ay: number; bx: number; by: number; life: number }
+/** Per-racer state from the previous frame, for edge-triggered effects. */
+interface Prev { air: number; boost: number; lap: number; sx: number; sy: number; scraping: boolean }
 
 export class View {
   readonly root = new Container();
@@ -204,7 +208,18 @@ export class View {
   private camY: number;
   private zoom = 1;
   private shake = 0;
+  /** Brief zoom-out kick on boosts and launches. */
+  private punch = 0;
   private rand = mulberry32(7);
+  private fx = new Graphics();
+  private glow = new Graphics();
+  private rings: Ring[] = [];
+  private scorch: Scorch[] = [];
+  private prev: Prev[] = [];
+  private stars = new Container();
+  private starSprites: Sprite[] = [];
+  private starPts: number[] = [];
+  private startFlash = 0;
 
   constructor(private race: Scene, readonly follow: Racer, private ghostPose: () => Pose | null, base?: BaseLayer) {
     this.layer = base ?? new TrackLayer(race.course as Track);
@@ -225,8 +240,25 @@ export class View {
       this.world.addChild(s);
     }
     this.sparkLayer.blendMode = 'add';
-    this.world.addChild(this.sparkLayer);
-    this.root.addChild(this.world, this.minimap, this.mask);
+    this.fx.blendMode = 'add';
+    this.glow.blendMode = 'add';
+    // Wall glow and scorch marks sit under the ships; rings and sparks over them.
+    this.world.addChildAt(this.glow, 2);
+    this.world.addChild(this.sparkLayer, this.fx);
+    // Screen-space parallax stars behind everything.
+    const sr = mulberry32(99);
+    for (let i = 0; i < 140; i++) {
+      const depth = sr() < 0.6 ? 0.08 : 0.2;
+      this.starPts.push(sr(), sr(), depth, 0.3 + sr() * 0.9);
+      const sp = new Sprite(Texture.WHITE);
+      sp.anchor.set(0.5);
+      sp.width = sp.height = depth > 0.1 ? 2.2 : 1.3;
+      sp.alpha = this.starPts[this.starPts.length - 1] * (depth > 0.1 ? 0.6 : 0.35);
+      this.stars.addChild(sp);
+      this.starSprites.push(sp);
+    }
+    this.root.addChild(this.stars, this.world, this.minimap, this.mask);
+    for (const r of race.racers) this.prev.push({ air: 0, boost: 0, lap: r.lap, sx: NaN, sy: NaN, scraping: false });
     this.root.mask = this.mask;
     this.camX = follow.ship.x;
     this.camY = follow.ship.y;
@@ -288,10 +320,29 @@ export class View {
       sp.flame(s.throttle > 0 || s.scrape > 0, 0.6 + Math.random() * 0.5 + (s.boost > 0 || s.scrape > 0 ? 0.8 : 0),
         s.boost > 0 ? 0xffe14d : s.scrape > 0 ? 0xff7a3d : r.spec.color);
 
+      const pv = this.prev[i];
+      const me = r === this.follow;
+      if (s.air > 0 && pv.air <= 0) { this.ring(s.x, s.y, 8, 46, 0.45, 0xffffff, 2); if (me) this.punch = Math.max(this.punch, 0.08); }
+      if (s.air <= 0 && pv.air > 0 && s.fall <= 0) {
+        this.ring(s.x, s.y, 6, 34, 0.35, r.spec.color, 2.5);
+        for (let k = 0; k < 10; k++) { const a = this.rand() * Math.PI * 2; this.spark(s.x, s.y, Math.cos(a) * 90, Math.sin(a) * 90, 0xffffff, 0.3); }
+        if (me) this.shake = Math.max(this.shake, 3);
+      }
+      if (s.boost > 0.55 && pv.boost <= 0.55) { this.ring(s.x, s.y, 10, 60, 0.5, 0xffe14d, 3); if (me) this.punch = Math.max(this.punch, 0.1); }
+      if (me && r.lap > pv.lap && r.lap >= 1) { this.ring(s.x, s.y, 8, 55, 0.6, r.spec.color, 2.5); this.startFlash = 1; }
+      // Scorch the wall where we grind.
+      if (s.scrape > 0) {
+        if (pv.scraping && Math.hypot(s.scrapeX - pv.sx, s.scrapeY - pv.sy) < 30) this.scorch.push({ ax: pv.sx, ay: pv.sy, bx: s.scrapeX, by: s.scrapeY, life: 1.4 });
+        pv.sx = s.scrapeX; pv.sy = s.scrapeY;
+      }
+      pv.scraping = s.scrape > 0;
+      pv.air = s.air; pv.boost = s.boost; pv.lap = r.lap;
+
       const trail = this.trails[i];
       const pts = trail.pts;
       if (s.warped > 0.3 || s.fall > 0) pts.length = 0;
       if (s.warped > 0.33) {
+        this.ring(s.x, s.y, 4, 50, 0.45, 0x5ad1ff, 2.5);
         for (let k = 0; k < 18; k++) {
           const a = this.rand() * Math.PI * 2, v = 30 + this.rand() * 130;
           this.spark(s.x, s.y, Math.cos(a) * v, Math.sin(a) * v, 0x5ad1ff, 0.4);
@@ -303,12 +354,17 @@ export class View {
         pts.push(s.x - Math.cos(s.angle) * 8, s.y - Math.sin(s.angle) * 8);
         if (pts.length > 80) pts.splice(0, 2);
       }
+      // Trail in 5 fading bands: one stroke per band keeps this cheap.
       const g = trail.g.clear();
       const m = pts.length / 2;
-      for (let k = 1; k < m; k++) {
-        const f = k / m;
-        g.moveTo(pts[k * 2 - 2], pts[k * 2 - 1]).lineTo(pts[k * 2], pts[k * 2 + 1])
-          .stroke({ width: 0.6 + f * 2.6, color: r.spec.color, alpha: f * 0.45, cap: 'round' });
+      const BANDS = 5;
+      for (let band = 0; band < BANDS; band++) {
+        const k0 = Math.max(1, Math.floor((band / BANDS) * m)), k1 = Math.floor(((band + 1) / BANDS) * m);
+        if (k1 <= k0) continue;
+        g.moveTo(pts[k0 * 2 - 2], pts[k0 * 2 - 1]);
+        for (let k = k0; k < k1; k++) g.lineTo(pts[k * 2], pts[k * 2 + 1]);
+        const f = (band + 1) / BANDS;
+        g.stroke({ width: 0.6 + f * 2.6, color: r.spec.color, alpha: f * 0.45, cap: 'round', join: 'round' });
       }
 
       if (s.scrape > 0) {
@@ -325,6 +381,7 @@ export class View {
           const a = this.rand() * Math.PI * 2, v = 40 + this.rand() * s.hit * 0.6;
           this.spark(s.hitX, s.hitY, Math.cos(a) * v, Math.sin(a) * v, r.spec.color, 0.35 + this.rand() * 0.3);
         }
+        this.ring(s.hitX, s.hitY, 3, 10 + s.hit * 0.08, 0.3, 0xffffff, 1.5);
         if (r === this.follow) this.shake = Math.min(6, s.hit / 60);
         s.hit = 0;
       }
@@ -349,10 +406,17 @@ export class View {
         this.sparks.pop();
         continue;
       }
+      p.s.rotation = Math.atan2(p.vy, p.vx);
+      if (p.len !== undefined) {
+        // Speed streak: fixed in the world, fades in and out.
+        const f = p.life / p.max;
+        p.s.alpha = Math.sin(f * Math.PI) * 0.35;
+        p.s.width = p.len;
+        continue;
+      }
       p.vx *= Math.exp(-3 * dt); p.vy *= Math.exp(-3 * dt);
       p.s.x += p.vx * dt; p.s.y += p.vy * dt;
       p.s.alpha = p.life / p.max;
-      p.s.rotation = Math.atan2(p.vy, p.vx);
       p.s.width = 1 + Math.hypot(p.vx, p.vy) * 0.03;
     }
 
@@ -363,14 +427,17 @@ export class View {
     const base = Math.min(this.w, this.h) / 235;
     const targetZoom = base * clamp(1.12 - speed / 1500, 0.78, 1.12);
     this.zoom += (targetZoom - this.zoom) * (1 - Math.exp(-2.2 * dt));
+    this.punch *= Math.exp(-4 * dt);
     const tx = s.x + s.vx * 0.22, ty = s.y + s.vy * 0.22;
     const k = 1 - Math.exp(-7 * dt);
     this.camX += (tx - this.camX) * k;
     this.camY += (ty - this.camY) * k;
     this.shake *= Math.exp(-10 * dt);
     const jx = (this.rand() - 0.5) * this.shake, jy = (this.rand() - 0.5) * this.shake;
-    this.world.scale.set(this.zoom);
-    this.world.position.set(this.w / 2 - this.camX * this.zoom + jx, this.h / 2 - this.camY * this.zoom + jy);
+    const z = this.zoom * (1 - this.punch);
+    this.world.scale.set(z);
+    this.world.position.set(this.w / 2 - this.camX * z + jx, this.h / 2 - this.camY * z + jy);
+    this.drawFx(dt, speed, z);
 
     const md = this.miniDots.clear();
     for (const r of race.racers) {
@@ -379,6 +446,99 @@ export class View {
         .fill({ color: r.spec.color });
       if (big) md.circle(r.ship.x * this.miniScale + this.miniOx, r.ship.y * this.miniScale + this.miniOy, 8).stroke({ width: 1.5, color: 0xffffff, alpha: 0.8 });
     }
+  }
+
+  private ring(x: number, y: number, r0: number, r1: number, life: number, color: number, width: number): void {
+    if (this.rings.length < 60) this.rings.push({ x, y, r0, r1, life, max: life, color, width });
+  }
+
+  /** Wall glow near ships, grind scorch marks, rings, speed streaks and parallax stars. */
+  private drawFx(dt: number, speed: number, z: number): void {
+    const course = this.race.course;
+    const g = this.glow.clear();
+    // Neon walls brighten as ships pass close to them.
+    const halfW = this.w / 2 / z + 60, halfH = this.h / 2 / z + 60;
+    const glowPaths: number[][] = [];
+    for (const r of this.race.racers) {
+      const s = r.ship;
+      if (r.out || Math.abs(s.x - this.camX) > halfW || Math.abs(s.y - this.camY) > halfH) continue;
+      for (const id of course.query(s.x, s.y)) {
+        const sg = course.segments[id];
+        const ex = sg.bx - sg.ax, ey = sg.by - sg.ay;
+        const l2 = ex * ex + ey * ey || 1;
+        const t = clamp(((s.x - sg.ax) * ex + (s.y - sg.ay) * ey) / l2, 0, 1);
+        const d = Math.hypot(s.x - sg.ax - ex * t, s.y - sg.ay - ey * t);
+        if (d > 42) continue;
+        // Long level walls: only light the stretch beside the ship.
+        const len = Math.sqrt(l2), half = Math.min(1, 24 / len);
+        const t0 = Math.max(0, t - half), t1 = Math.min(1, t + half);
+        const a = (1 - d / 42) * (s.scrape > 0 && r === this.follow ? 1 : 0.6);
+        const bucket = a > 0.6 ? 2 : a > 0.3 ? 1 : 0;
+        (glowPaths[bucket] ??= []).push(sg.ax + ex * t0, sg.ay + ey * t0, sg.ax + ex * t1, sg.ay + ey * t1);
+      }
+      glowPaths.forEach((segs, bucket) => {
+        if (!segs?.length) return;
+        for (let k = 0; k < segs.length; k += 4) g.moveTo(segs[k], segs[k + 1]).lineTo(segs[k + 2], segs[k + 3]);
+        g.stroke({ width: 3.5, color: r.spec.color, alpha: [0.15, 0.35, 0.6][bucket], cap: 'round' });
+      });
+      glowPaths.length = 0;
+    }
+    const bands: number[][] = [[], [], [], []];
+    for (let i = this.scorch.length - 1; i >= 0; i--) {
+      const sc = this.scorch[i];
+      sc.life -= dt;
+      if (sc.life <= 0) { this.scorch[i] = this.scorch[this.scorch.length - 1]; this.scorch.pop(); continue; }
+      bands[Math.min(3, Math.floor((sc.life / 1.4) * 4))].push(sc.ax, sc.ay, sc.bx, sc.by);
+    }
+    bands.forEach((segs, band) => {
+      if (!segs.length) return;
+      for (let k = 0; k < segs.length; k += 4) g.moveTo(segs[k], segs[k + 1]).lineTo(segs[k + 2], segs[k + 3]);
+      const f = (band + 1) / 4;
+      g.stroke({ width: 1 + f * 3, color: f > 0.6 ? 0xffe14d : 0xff7a3d, alpha: f * 0.9, cap: 'round' });
+    });
+    if (this.scorch.length > 400) this.scorch.splice(0, this.scorch.length - 400);
+
+    const fx = this.fx.clear();
+    for (let i = this.rings.length - 1; i >= 0; i--) {
+      const rg = this.rings[i];
+      rg.life -= dt;
+      if (rg.life <= 0) { this.rings[i] = this.rings[this.rings.length - 1]; this.rings.pop(); continue; }
+      const f = 1 - rg.life / rg.max;
+      const rad = rg.r0 + (rg.r1 - rg.r0) * (1 - (1 - f) ** 3);
+      fx.circle(rg.x, rg.y, rad).stroke({ width: rg.width * (1 - f * 0.6), color: rg.color, alpha: (1 - f) * 0.8 });
+    }
+    if (this.startFlash > 0 && course instanceof Track) {
+      this.startFlash -= dt * 1.6;
+      fx.moveTo(course.lx[0], course.ly[0]).lineTo(course.rx[0], course.ry[0]).stroke({ width: 8 * this.startFlash, color: 0xffffff, alpha: this.startFlash });
+    }
+
+    // Speed streaks once you're moving fast.
+    const s = this.follow.ship;
+    if (speed > 300 && s.fall <= 0) {
+      const n = Math.min(4, Math.floor((speed - 300) / 70) + 1);
+      for (let k = 0; k < n; k++) {
+        const x = this.camX + (this.rand() - 0.5) * halfW * 2, y = this.camY + (this.rand() - 0.5) * halfH * 2;
+        this.streak(x, y, s.vx, s.vy, 10 + (speed - 300) * 0.12);
+      }
+    }
+
+    // Parallax stars (screen space): two depths drifting against the camera.
+    const W = this.w, H = this.h;
+    for (let i = 0; i < this.starPts.length; i += 4) {
+      const depth = this.starPts[i + 2];
+      this.starSprites[i / 4].position.set(
+        ((this.starPts[i] * W - this.camX * z * depth) % W + W) % W,
+        ((this.starPts[i + 1] * H - this.camY * z * depth) % H + H) % H,
+      );
+    }
+  }
+
+  private streak(x: number, y: number, vx: number, vy: number, len: number): void {
+    if (this.sparks.length > 480) return;
+    this.spark(x, y, vx, vy, 0xffffff, 0.3);
+    const p = this.sparks[this.sparks.length - 1];
+    p.len = len;
+    p.s.height = 0.7;
   }
 
   /** Explosion of sparks, e.g. when a ship is knocked out. */
@@ -401,6 +561,7 @@ export class View {
     s.position.set(x, y);
     s.height = 0.9;
     s.tint = color;
+    s.rotation = Math.atan2(vy, vx);
     this.sparks.push({ s, vx, vy, life, max: life });
   }
 

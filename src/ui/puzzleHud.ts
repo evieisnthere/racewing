@@ -13,6 +13,8 @@ export class PuzzleHud {
   private count: HTMLElement;
   private speed: HTMLElement;
   private flashTimer = 0;
+  private heat = 0;
+  private heatEl!: HTMLElement;
   private lastKeys = '';
 
   constructor(parent: HTMLElement, private run: PuzzleRun, targets: [number, number, number], color: number) {
@@ -28,10 +30,12 @@ export class PuzzleHud {
         <div class="hud-info"><span class="medal b"></span>${formatTime(targets[0])}<span class="medal s"></span>${formatTime(targets[1])}<span class="medal g"></span>${formatTime(targets[2])}</div>
       </div>
       <div class="hud-speed"><div></div></div>
+      <div class="hud-heat"></div>
       <div class="hud-flash"></div>
       <div class="hud-count"></div>`;
     const q = (s: string) => this.el.querySelector(s) as HTMLElement;
     this.time = q('.hud-time'); this.keys = q('.hud-keys'); this.flashEl = q('.hud-flash'); this.count = q('.hud-count'); this.speed = q('.hud-speed > div');
+    this.heatEl = this.el.querySelector('.hud-heat') as HTMLElement;
     parent.appendChild(this.el);
   }
 
@@ -59,6 +63,8 @@ export class PuzzleHud {
     }
     const s = run.me.ship;
     this.speed.style.width = Math.min(100, (Math.hypot(s.vx, s.vy) / 450) * 100).toFixed(1) + '%';
+    this.heat += ((s.scrape > 0 ? 1 : 0) - this.heat) * Math.min(1, dt * (s.scrape > 0 ? 8 : 3));
+    this.heatEl.style.opacity = this.heat.toFixed(2);
     if (run.time < 0) {
       this.count.textContent = String(Math.ceil(-run.time));
       this.count.className = 'hud-count show';

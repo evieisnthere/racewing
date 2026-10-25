@@ -15,6 +15,10 @@ const mtof = (m: number) => 440 * Math.pow(2, (m - 69) / 12);
 interface EngineVoice {
   osc1: OscillatorNode; osc2: OscillatorNode; filter: BiquadFilterNode; gain: GainNode;
   noiseGain: GainNode; noiseFilter: BiquadFilterNode; src: AudioBufferSourceNode;
+  /** Air rush that rises with speed. */
+  windGain: GainNode; windFilter: BiquadFilterNode;
+  /** Low sub that adds weight at speed. */
+  sub: OscillatorNode; subGain: GainNode;
 }
 
 export class Sound {
@@ -218,7 +222,9 @@ export class Sound {
       const t = this.ctx.currentTime;
       e.gain.gain.setTargetAtTime(0, t, 0.05);
       e.noiseGain.gain.setTargetAtTime(0, t, 0.05);
-      e.osc1.stop(t + 0.3); e.osc2.stop(t + 0.3); e.src.stop(t + 0.3);
+      e.windGain.gain.setTargetAtTime(0, t, 0.05);
+      e.subGain.gain.setTargetAtTime(0, t, 0.05);
+      e.osc1.stop(t + 0.3); e.osc2.stop(t + 0.3); e.src.stop(t + 0.3); e.sub.stop(t + 0.3);
     }
     while (this.engines.length < count) this.engines.push(this.makeEngine());
   }
@@ -246,8 +252,19 @@ export class Sound {
     const noiseGain = ctx.createGain();
     noiseGain.gain.value = 0;
     src.connect(noiseFilter).connect(noiseGain).connect(this.sfxBus);
-    osc1.start(); osc2.start(); src.start();
-    return { osc1, osc2, filter, gain, noiseGain, noiseFilter, src };
+    const windFilter = ctx.createBiquadFilter();
+    windFilter.type = 'highpass';
+    windFilter.frequency.value = 900;
+    const windGain = ctx.createGain();
+    windGain.gain.value = 0;
+    src.connect(windFilter).connect(windGain).connect(this.sfxBus);
+    const sub = ctx.createOscillator();
+    sub.type = 'sine';
+    const subGain = ctx.createGain();
+    subGain.gain.value = 0;
+    sub.connect(subGain).connect(this.sfxBus);
+    osc1.start(); osc2.start(); src.start(); sub.start();
+    return { osc1, osc2, filter, gain, noiseGain, noiseFilter, src, windGain, windFilter, sub, subGain };
   }
 
   updateEngine(i: number, speed: number, throttle: number, grinding: boolean, active: boolean): void {
@@ -260,8 +277,17 @@ export class Sound {
     e.filter.frequency.setTargetAtTime(180 + speed * 3 + (throttle > 0 ? 250 : 0), t, 0.06);
     const share = 1 / Math.max(1, this.engines.length);
     e.gain.gain.setTargetAtTime(active ? (throttle !== 0 ? 0.085 : 0.05) * share : 0, t, 0.08);
-    e.noiseGain.gain.setTargetAtTime(active && grinding ? 0.11 * share : 0, t, 0.03);
-    e.noiseFilter.frequency.setTargetAtTime(1600 + speed * 3, t, 0.05);
+    // Grind: crackling sizzle (random flutter on top of the band-passed noise).
+    const crackle = 0.6 + Math.random() * 0.9;
+    e.noiseGain.gain.setTargetAtTime(active && grinding ? 0.12 * crackle * share : 0, t, 0.015);
+    e.noiseFilter.frequency.setTargetAtTime(1400 + speed * 4 + Math.random() * 600, t, 0.02);
+    const v = Math.min(1, speed / 520);
+    e.windGain.gain.setTargetAtTime(active ? v * v * 0.07 * share : 0, t, 0.1);
+    e.windFilter.frequency.setTargetAtTime(500 + speed * 2.5, t, 0.1);
+    e.sub.frequency.setTargetAtTime(28 + speed * 0.05, t, 0.1);
+    e.subGain.gain.setTargetAtTime(active ? v * 0.12 * share : 0, t, 0.1);
+    // The music opens up as you go faster.
+    if (i === 0) this.padFilter.frequency.setTargetAtTime(500 + this.intensity * 1800 + speed * 2.2, t, 0.4);
   }
 
   // ---------- one-shots ----------
@@ -288,6 +314,93 @@ export class Sound {
     ng.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
     src.connect(f).connect(ng).connect(this.sfxBus);
     src.start(t, Math.random()); src.stop(t + 0.2);
+    this.clank(v);
+  }
+
+  /** Metallic clank layered on wall hits. */
+  private clank(v: number): void {
+    const ctx = this.ctx!;
+    const t = ctx.currentTime;
+    for (const [f, d] of [[620, 0.12], [1330, 0.08], [2210, 0.05]] as [number, number][]) {
+      const o = ctx.createOscillator();
+      o.type = 'triangle';
+      o.frequency.setValueAtTime(f * (0.95 + Math.random() * 0.1), t);
+      o.frequency.exponentialRampToValueAtTime(f * 0.7, t + d);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.12 * v, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + d);
+      o.connect(g).connect(this.sfxBus);
+      o.start(t); o.stop(t + d + 0.02);
+    }
+  }
+
+  private sweep(type: OscillatorType, f0: number, f1: number, dur: number, vol: number, wet = true): void {
+    const ctx = this.ctx!;
+    const t = ctx.currentTime;
+    const o = ctx.createOscillator();
+    o.type = type;
+    o.frequency.setValueAtTime(f0, t);
+    o.frequency.exponentialRampToValueAtTime(f1, t + dur);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(vol, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    o.connect(g).connect(this.sfxBus);
+    if (wet) g.connect(this.reverb);
+    o.start(t); o.stop(t + dur + 0.02);
+  }
+
+  private noiseBurst(f0: number, f1: number, dur: number, vol: number, pan = 0): void {
+    const ctx = this.ctx!;
+    const t = ctx.currentTime;
+    const src = ctx.createBufferSource();
+    src.buffer = this.noise;
+    const f = ctx.createBiquadFilter();
+    f.type = 'bandpass';
+    f.Q.value = 1.4;
+    f.frequency.setValueAtTime(f0, t);
+    f.frequency.exponentialRampToValueAtTime(f1, t + dur);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.001, t);
+    g.gain.exponentialRampToValueAtTime(vol, t + dur * 0.45);
+    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    const p = ctx.createStereoPanner();
+    p.pan.value = Math.max(-1, Math.min(1, pan));
+    src.connect(f).connect(g).connect(p).connect(this.sfxBus);
+    src.start(t, Math.random()); src.stop(t + dur + 0.02);
+  }
+
+  /** A ship passing close by: panned whoosh. */
+  whoosh(pan: number, strength: number): void {
+    if (this.ctx) this.noiseBurst(350, 2400, 0.42, 0.18 * Math.min(1, strength), pan);
+  }
+
+  jump(): void {
+    if (!this.ctx) return;
+    this.sweep('sine', 180, 620, 0.35, 0.16);
+    this.noiseBurst(600, 3000, 0.3, 0.08);
+  }
+
+  land(): void {
+    if (!this.ctx) return;
+    this.sweep('sine', 110, 40, 0.25, 0.4, false);
+    this.noiseBurst(1200, 300, 0.18, 0.1);
+  }
+
+  warp(): void {
+    if (!this.ctx) return;
+    this.sweep('sawtooth', 1800, 160, 0.4, 0.07);
+    this.sweep('sine', 300, 1500, 0.3, 0.1);
+  }
+
+  fall(): void {
+    if (!this.ctx) return;
+    this.sweep('sine', 700, 70, 0.8, 0.16);
+  }
+
+  pickup(): void {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    [88, 93, 100].forEach((m, i) => this.tone(mtof(m), t + i * 0.05, 0.4, 0.1, 'square'));
   }
 
   private tone(freq: number, at: number, dur: number, vol: number, type: OscillatorType = 'sine', wet = true): void {
@@ -307,6 +420,7 @@ export class Sound {
   pad(): void {
     const ctx = this.ctx;
     if (!ctx) return;
+    this.sweep('sine', 90, 45, 0.3, 0.3, false);
     const t = ctx.currentTime;
     const o = ctx.createOscillator();
     o.type = 'sine';

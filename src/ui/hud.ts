@@ -17,6 +17,8 @@ export class Hud {
   private radioEl: HTMLElement;
   private radioTimer = 0;
   private flashTimer = 0;
+  private heat = 0;
+  private heatEl!: HTMLElement;
   private cache = new Map<HTMLElement, string>();
 
   constructor(parent: HTMLElement, private race: Race, private racer: Racer, private timeTrial: boolean) {
@@ -33,6 +35,7 @@ export class Hud {
         <div class="hud-info"></div>
       </div>
       <div class="hud-speed"><div></div></div>
+      <div class="hud-heat"></div>
       <div class="hud-flash"></div>
       <div class="hud-radio"></div>
       <div class="hud-count"></div>`;
@@ -42,6 +45,7 @@ export class Hud {
     this.infoEl = q('.hud-info');
     this.radioEl = q('.hud-radio');
     this.el.style.setProperty('--racer', '#' + racer.spec.color.toString(16).padStart(6, '0'));
+    this.heatEl = this.el.querySelector('.hud-heat') as HTMLElement;
     parent.appendChild(this.el);
   }
 
@@ -102,6 +106,9 @@ export class Hud {
     const sp = Math.hypot(r.ship.vx, r.ship.vy);
     this.speed.style.width = Math.min(100, (sp / 450) * 100).toFixed(1) + '%';
     this.speed.classList.toggle('boost', r.ship.scrape > 0 || r.ship.boost > 0);
+    // Screen-edge glow while grinding.
+    this.heat += ((r.ship.scrape > 0 ? 1 : 0) - this.heat) * Math.min(1, dt * (r.ship.scrape > 0 ? 8 : 3));
+    this.heatEl.style.opacity = this.heat.toFixed(2);
 
     if (race.time < 0) {
       this.text(this.count, String(Math.ceil(-race.time)));
