@@ -52,18 +52,23 @@ export class RouteBot {
     }
     const speed = Math.hypot(s.vx, s.vy);
     const desired = Math.atan2(ty - s.y, tx - s.x);
+    // Steer by thrust vector (the ship slides), leaning at most ~25 degrees off the target.
     let aim = desired;
-    if (speed > 40) aim = desired + wrapAngle(desired - Math.atan2(s.vy, s.vx)) * 0.9;
+    const want = Math.max(speed, 110);
+    const dvx = Math.cos(desired) * want - s.vx, dvy = Math.sin(desired) * want - s.vy;
+    if (Math.hypot(dvx, dvy) > 25) aim = Math.atan2(dvy, dvx);
+    const lean = wrapAngle(aim - desired);
+    if (Math.abs(lean) > 0.45) aim = desired + Math.sign(lean) * 0.45;
     const err = wrapAngle(aim - s.angle);
     // Corner speed from the turn at the upcoming waypoint.
-    let allowed = 450;
+    let allowed = 380;
     if (this.i < this.pts.length - 1) {
       const [nx, ny] = this.pts[this.i + 1];
       const turn = Math.abs(wrapAngle(Math.atan2(ny - ty, nx - tx) - desired));
-      allowed = 260 - turn * 65;
+      allowed = Math.max(70, 220 - turn * 70);
     }
-    const brakeDist = Math.max(0, (speed * speed - allowed * allowed) / (2 * PHYS.brake * 0.6));
-    if ((speed > allowed && dist < brakeDist + 35) || (Math.abs(err) > 1.4 && speed > 75)) return this.set(true, true);
+    const brakeDist = Math.max(0, (speed * speed - allowed * allowed) / (2 * PHYS.brake * 0.5));
+    if ((speed > allowed && dist < brakeDist + 40) || (Math.abs(err) > 1.4 && speed > 60)) return this.set(true, true);
     const dz = 0.05 + this.rand() * 0.02;
     return this.set(err < -dz, err > dz);
   }

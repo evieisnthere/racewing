@@ -361,9 +361,9 @@ export class View {
     const speed = Math.hypot(s.vx, s.vy);
     // About 8 ships across the shorter screen edge.
     const base = Math.min(this.w, this.h) / 235;
-    const targetZoom = base * clamp(1.1 - speed / 1800, 0.86, 1.1);
+    const targetZoom = base * clamp(1.12 - speed / 1500, 0.78, 1.12);
     this.zoom += (targetZoom - this.zoom) * (1 - Math.exp(-2.2 * dt));
-    const tx = s.x + s.vx * 0.35, ty = s.y + s.vy * 0.35;
+    const tx = s.x + s.vx * 0.22, ty = s.y + s.vy * 0.22;
     const k = 1 - Math.exp(-7 * dt);
     this.camX += (tx - this.camX) * k;
     this.camY += (ty - this.camY) * k;

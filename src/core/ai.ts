@@ -25,13 +25,15 @@ export interface Skill {
   padSeek: number;
   /** Engine power multiplier. */
   power: number;
+  /** 0..1: how hard the bot pushes its line onto the wall the racing line runs near (to grind it). */
+  wallHug: number;
 }
 
 export const SKILLS: Record<Tier, Skill> = {
-  easy: { react: 0.11, deadzone: 0.14, lookahead: 0.42, latAccel: 600, lineBlend: 0.35, margin: 20, noise: 0.35, mistake: 0.05, padSeek: 0, power: 0.86 },
-  medium: { react: 0.07, deadzone: 0.09, lookahead: 0.36, latAccel: 840, lineBlend: 0.65, margin: 13, noise: 0.2, mistake: 0.02, padSeek: 0.5, power: 0.93 },
-  hard: { react: 0.04, deadzone: 0.06, lookahead: 0.32, latAccel: 1080, lineBlend: 0.9, margin: 6, noise: 0.1, mistake: 0.006, padSeek: 1, power: 0.98 },
-  insane: { react: 0.02, deadzone: 0.035, lookahead: 0.3, latAccel: 1320, lineBlend: 1, margin: 1, noise: 0.04, mistake: 0, padSeek: 1, power: 1.02 },
+  easy: { react: 0.11, deadzone: 0.14, lookahead: 0.76, latAccel: 220, lineBlend: 0.35, margin: 20, noise: 0.35, mistake: 0.05, padSeek: 0, power: 0.86, wallHug: 0 },
+  medium: { react: 0.07, deadzone: 0.09, lookahead: 0.65, latAccel: 300, lineBlend: 0.65, margin: 13, noise: 0.2, mistake: 0.02, padSeek: 0.5, power: 0.93, wallHug: 0.35 },
+  hard: { react: 0.04, deadzone: 0.06, lookahead: 0.58, latAccel: 380, lineBlend: 0.9, margin: 6, noise: 0.1, mistake: 0.006, padSeek: 1, power: 0.98, wallHug: 0.7 },
+  insane: { react: 0.02, deadzone: 0.035, lookahead: 0.54, latAccel: 460, lineBlend: 1, margin: 1, noise: 0.04, mistake: 0, padSeek: 1, power: 1.02, wallHug: 0.9 },
 };
 
 export const TIER_NAMES: Record<Tier, string> = { easy: 'Easy', medium: 'Medium', hard: 'Hard', insane: 'Insane' };
@@ -74,8 +76,14 @@ export class Bot {
     const look = 25 + Math.max(0, fwd) * k.lookahead;
     const ti = track.wrap(s.idx + Math.round(look / SPACING));
     const wander = Math.sin(time * 0.6 + this.phase) * k.noise;
-    const lim = Math.max(0, track.hw[ti] - PHYS.radius - k.margin);
+    const lim = Math.max(0, track.hw[ti] - PHYS.radius - (k.wallHug > 0.5 ? 2 : k.margin));
     let off = track.lineOff[ti] * k.lineBlend + wander * track.hw[ti];
+    // Grind: where the racing line runs near a wall, ride that wall instead.
+    const lo = track.lineOff[ti];
+    if (k.wallHug > 0 && Math.abs(lo) > track.hw[ti] * 0.3) {
+      const wall = Math.sign(lo) * (track.hw[ti] - PHYS.radius - 3);
+      off += (wall - off) * k.wallHug;
+    }
     for (const p of track.pads) {
       const ahead = track.wrap(p.i0 - s.idx) * SPACING;
       if (k.padSeek > 0 && ahead > 0 && ahead < look + 250) off += (p.lat - off) * k.padSeek;
@@ -85,11 +93,25 @@ export class Bot {
     const ty = track.cy[ti] + track.ny[ti] * off;
 
     const desired = Math.atan2(ty - s.y, tx - s.x);
+    // Steer by thrust vector: with little grip the nose has to point where it corrects the velocity,
+    // not just at the target. Aim along (desired velocity - current velocity).
     let aim = desired;
-    if (speed > 150) {
-      // Counter-steer the drift: point the nose past the target by the slip angle.
-      const va = Math.atan2(s.vy, s.vx);
-      aim = desired + wrapAngle(desired - va) * 0.7;
+    const want = Math.max(speed, 160);
+    const dvx = Math.cos(desired) * want - s.vx, dvy = Math.sin(desired) * want - s.vy;
+    if (Math.hypot(dvx, dvy) > 35) aim = Math.atan2(dvy, dvx);
+    // Only lean the nose ~20 degrees off the target: pointing further sideways kills forward progress.
+    const off2 = wrapAngle(aim - desired);
+    if (Math.abs(off2) > 0.35) aim = desired + Math.sign(off2) * 0.35;
+    // Riding a wall we mean to grind: nose along the wall, angled a touch away so the flame faces it;
+    // the grind hold keeps the ship pressed on.
+    if (k.wallHug > 0 && Math.abs(lo) > track.hw[s.idx] * 0.3) {
+      const side = Math.sign(lo);
+      const lat = track.lateral(s.x, s.y, s.idx);
+      if (lat * side > track.hw[s.idx] - PHYS.radius - 9) {
+        const tang = Math.atan2(track.ty[s.idx], track.tx[s.idx]);
+        const along = tang - side * 0.1;
+        aim = along + wrapAngle(aim - along) * (1 - k.wallHug);
+      }
     }
     const err = wrapAngle(aim - s.angle);
 

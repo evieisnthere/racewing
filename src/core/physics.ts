@@ -3,37 +3,40 @@ import { inRegion, type Course, type Segment } from './course';
 import { Track } from './track';
 
 // Data Wing-scale world: a ship is ~28 units long, tracks are ~4-5 ships wide.
-// Motion model: velocity keeps its magnitude and swings toward the heading (drift), losing speed only in
-// proportion to how sideways you're sliding. A weak engine and low drag mean momentum does the work;
-// grinding a wall with your engine flame adds roughly +50% on top of cruise speed.
+// Motion model: close to Newtonian. Thrust pushes along the nose, drag is low, and velocity only swings
+// weakly toward the nose, so the ship keeps sliding the way it was going: you change course by thrusting,
+// and speed builds and fades slowly. Walls keep your tangential speed, and grinding one with your engine
+// flame is the big source of speed (~+70% over cruise) while gently holding you against it.
 export const PHYS = {
-  thrust: 165,
-  drag: 0.55,
+  thrust: 150,
+  drag: 0.42,
   /** How fast velocity swings toward the heading (1/s): lower = longer drifts. */
-  align: 2.4,
+  align: 1.0,
   /** Speed lost per second at a full 90-degree slide. */
-  slipLoss: 0.7,
-  turnRate: 3.0,
-  turnAccel: 26,
-  brake: 420,
+  slipLoss: 0.18,
+  turnRate: 3.3,
+  turnAccel: 30,
+  brake: 380,
   reverse: 120,
   maxReverse: 90,
   radius: 9,
   /** sin(impact angle) below which wall contact is a slide rather than a hit. */
-  scrapeAngle: 0.45,
+  scrapeAngle: 0.55,
   /** Speed lost per second while sliding along a wall nose-first. */
-  wallFriction: 0.4,
+  wallFriction: 0.12,
   /** Grinding: tail (engine flame) within reach of the wall, nose angled away from it or near-parallel. */
-  grindReach: 13,
+  grindReach: 14,
   /** sin of the angle between nose and wall; slightly negative lets a near-parallel nose still count. */
   grindMinAngle: -0.15,
-  scrapeAccel: 80,
+  scrapeAccel: 230,
+  /** Grinding stops adding speed as you approach this (sustained grind settles ~+60% over cruise). */
+  grindCap: 900,
   /** Pull toward the wall while grinding, so you can ride it through corners. */
-  grindHold: 150,
+  grindHold: 170,
   /** Scales every gravity zone and well. */
   fieldScale: 0.42,
-  restitution: 0.3,
-  hitLoss: 0.45,
+  restitution: 0.25,
+  hitLoss: 0.3,
   padBoost: 110,
   padMax: 430,
   padCooldown: 0.5,
@@ -221,8 +224,9 @@ export function stepShip(s: Ship, intent: Intent, course: Course, dt: number): v
     if (s.scrape > 0) {
       const v = Math.hypot(s.vx, s.vy);
       if (v > 1) {
-        s.vx += (s.vx / v) * PHYS.scrapeAccel * dt;
-        s.vy += (s.vy / v) * PHYS.scrapeAccel * dt;
+        const a = PHYS.scrapeAccel * Math.max(0, 1 - v / PHYS.grindCap) * dt;
+        s.vx += (s.vx / v) * a;
+        s.vy += (s.vy / v) * a;
       }
       // Hold against the wall (the normal points away from it).
       s.vx -= s.scrapeNx * PHYS.grindHold * dt;
